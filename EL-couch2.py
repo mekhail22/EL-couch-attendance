@@ -1,4 +1,39 @@
+"""
+التطبيق الرئيسي لإدارة أكاديمية كرة القدم "الكوتش أكاديمي"
+يتطلب Streamlit Cloud مع secrets التالية:
+[google]
+spreadsheet_id = "..."
+
+[google.service_account]
+type = "service_account"
+...
+"""
+
 import streamlit as st
+import sys
+import importlib
+
+# التحقق من وجود المكتبات المطلوبة قبل المتابعة
+required_libs = {
+    "gspread": "gspread",
+    "oauth2client": "oauth2client",
+    "pandas": "pandas",
+    "plotly": "plotly"
+}
+
+missing_libs = []
+for lib_name, import_name in required_libs.items():
+    try:
+        importlib.import_module(import_name)
+    except ImportError:
+        missing_libs.append(lib_name)
+
+if missing_libs:
+    st.error(f"⚠️ المكتبات التالية غير مثبتة: {', '.join(missing_libs)}")
+    st.info("يرجى التأكد من وجود ملف `requirements.txt` يحتوي على هذه المكتبات وإعادة النشر.")
+    st.stop()
+
+# استيراد المكتبات بعد التحقق
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
@@ -41,7 +76,7 @@ SESSION_TYPES = ["Training", "Match", "Fitness", "Tactical"]
 
 SESSION_EXPIRY_HOURS = 24
 
-# ========================= دوال مساعدة =========================
+# ========================= دوال مساعدة عامة =========================
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -104,9 +139,11 @@ class SheetsManager:
         self.cache_ttl = 30
 
     def connect(self) -> bool:
+        """الاتصال بـ Google Sheets باستخدام st.secrets"""
         try:
             if "google" not in st.secrets:
                 st.error("❌ لم يتم العثور على [google] في secrets")
+                st.info("تأكد من إضافة secrets بالشكل الصحيح في Streamlit Cloud")
                 return False
             if "spreadsheet_id" not in st.secrets["google"]:
                 st.error("❌ لم يتم العثور على spreadsheet_id في secrets")
@@ -435,7 +472,7 @@ def logout(sheets_mgr):
     st.session_state.role = None
     st.session_state.session_id = None
 
-# ========================= لوحة تحكم الكابتن (موسعة) =========================
+# ========================= لوحة تحكم الكابتن =========================
 def show_coach_dashboard(sheets_mgr):
     st.markdown("# 🧑‍🏫 لوحة تحكم الكابتن - أكاديمية الكوتش")
     st.markdown("---")
