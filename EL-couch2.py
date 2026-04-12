@@ -1,1479 +1,1444 @@
-""")
-st.stop()
+# -*- coding: utf-8 -*-
+"""
+تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
+باستخدام Streamlit و Google Sheets
+"""
 
-# ============================================================
-# SECTION 2: إعدادات الصفحة والتنسيق
-# ============================================================
+import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import date, datetime, timedelta
+import re
+import time
+from typing import Optional, List, Dict, Any, Tuple
+import json
 
+# ==================== إعدادات الصفحة ====================
 st.set_page_config(
-page_title="الكوتش أكاديمي - نظام إدارة الأكاديمية",
-page_icon="⚽",
-layout="wide",
-initial_sidebar_state="expanded",
-menu_items={
-    'Get Help': 'https://www.example.com/help',
-    'Report a bug': "https://www.example.com/bug",
-    'About': "تطبيق إدارة أكاديمية الكوتش أكاديمي - الإصدار 2.0"
-}
+    page_title="الكوتش أكاديمي - إدارة الحضور والاشتراكات",
+    page_icon="⚽",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ============================================================
-# SECTION 3: تعريف CSS بشكل آمن (بدون أخطاء)
-# ============================================================
-
-# ملاحظة: تم وضع CSS داخل سلسلة نصية باستخدام triple quotes،
-# ولا توجد أية أحرف # خارج السياق. هذا آمن تماماً في Python.
-
-_css_styles = """
-<style>
-/* تنسيق عام للصفحة */
-.main-header {
-background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
-padding: 1.5rem;
-border-radius: 10px;
-color: white;
-text-align: center;
-margin-bottom: 2rem;
-}
-.main-header h1 {
-margin: 0;
-font-size: 2.5rem;
-}
-.main-header p {
-margin: 0.5rem 0 0;
-opacity: 0.9;
-}
-/* تنسيق البطاقات */
-.card {
-background-color: #f8f9fa;
-border-radius: 10px;
-padding: 1.5rem;
-box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-margin-bottom: 1rem;
-border-right: 4px solid #2a5298;
-}
-.metric-card {
-background: white;
-border-radius: 10px;
-padding: 1rem;
-text-align: center;
-box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-transition: transform 0.2s;
-}
-.metric-card:hover {
-transform: translateY(-5px);
-}
-.metric-value {
-font-size: 2rem;
-font-weight: bold;
-color: #1e3c72;
-}
-.metric-label {
-font-size: 0.9rem;
-color: #666;
-}
-/* تنسيق الأزرار */
-.stButton button {
-width: 100%;
-border-radius: 8px;
-font-weight: bold;
-transition: all 0.3s;
-}
-.stButton button:hover {
-transform: scale(1.02);
-}
-/* تنسيق الشريط الجانبي */
-[data-testid="stSidebar"] {
-background-color: #f0f2f6;
-padding: 1rem;
-}
-.user-info {
-background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-padding: 1rem;
-border-radius: 10px;
-color: white;
-margin-bottom: 1rem;
-text-align: center;
-}
-/* تنسيق التبويبات */
-.stTabs [data-baseweb="tab-list"] {
-gap: 8px;
-}
-.stTabs [data-baseweb="tab"] {
-border-radius: 8px;
-padding: 8px 16px;
-font-weight: bold;
-}
-/* تنسيق الجداول */
-.stDataFrame {
-direction: ltr;
-}
-/* تنسيق الإشعارات */
-.stAlert {
-border-radius: 8px;
-}
-/* تنسيق حقول الإدخال */
-.stTextInput input, .stSelectbox select, .stNumberInput input {
-border-radius: 8px;
-}
-/* تنسيق معلومات المستخدم */
-h1, h2, h3, h4, h5, h6 {
-font-family: 'Tahoma', 'Arial', sans-serif;
-}
-/* تنسيق شريط التقدم */
-div[data-testid="stProgress"] {
-direction: ltr;
-}
-</style>
-"""
-
-st.markdown(_css_styles, unsafe_allow_html=True)
-
-# ============================================================
-# SECTION 4: دوال الاتصال بـ Google Sheets (مُحسّنة)
-# ============================================================
-
-@st.cache_resource(ttl=3600, show_spinner=False)
-def get_google_sheets_client():
-"""
-إنشاء عميل Google Sheets باستخدام بيانات Service Account من secrets.toml.
-يتم تخزين العميل في الكاش لتحسين الأداء ولمدة ساعة.
-"""
-try:
-    # التحقق من وجود secrets بشكل صحيح
-    if "google" not in st.secrets:
-        st.error("❌ خطأ: لم يتم العثور على إعدادات Google في secrets.toml.")
-        st.stop()
-    if "service_account" not in st.secrets["google"]:
-        st.error("❌ خطأ: لم يتم العثور على service_account في secrets.google.")
-        st.stop()
-    if "spreadsheet_id" not in st.secrets["google"]:
-        st.error("❌ خطأ: لم يتم العثور على spreadsheet_id في secrets.google.")
-        st.stop()
+# ==================== أنماط CSS مخصصة ====================
+def load_css():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
     
-    service_account_info = dict(st.secrets["google"]["service_account"])
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets"
-    ]
-    credentials = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-    client = gspread.authorize(credentials)
-    return client
-except Exception as e:
-    st.error(f"⚠️ خطأ في الاتصال بـ Google Sheets: {str(e)}")
-    st.stop()
-
-def get_spreadsheet():
-"""الحصول على كائن جدول البيانات باستخدام Spreadsheet ID"""
-client = get_google_sheets_client()
-try:
-    spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
-    return client.open_by_key(spreadsheet_id)
-except Exception as e:
-    st.error(f"⚠️ لا يمكن الوصول إلى جدول البيانات: {str(e)}")
-    st.stop()
-
-@st.cache_data(ttl=30, show_spinner=False)
-def load_dataframe(sheet_name: str) -> pd.DataFrame:
-"""
-تحميل ورقة كاملة وتحويلها إلى DataFrame مع تخزين مؤقت لمدة 30 ثانية.
-إذا لم تكن الورقة موجودة، يتم إنشاؤها تلقائياً مع الأعمدة المناسبة.
-"""
-spreadsheet = get_spreadsheet()
-try:
-    worksheet = spreadsheet.worksheet(sheet_name)
-    data = worksheet.get_all_records()
-    if data:
-        df = pd.DataFrame(data)
-        # تحويل الأعمدة الرقمية
-        numeric_cols = ['amount', 'monthly_fee']
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        return df
-    else:
-        return pd.DataFrame()
-except gspread.WorksheetNotFound:
-    # إنشاء الورقة إذا لم تكن موجودة
-    spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="20")
-    # إضافة رؤوس الأعمدة حسب نوع الورقة
-    headers_map = {
-        "Users": ["username", "password", "role", "created_at", "last_login"],
-        "Attendance": ["player_name", "date", "status", "recorded_by", "timestamp"],
-        "Subscriptions": ["player_name", "monthly_fee", "start_date", "end_date", "subscription_status", "notes"],
-        "Payments": ["player_name", "amount", "payment_method", "payment_date", "notes", "receipt_id"]
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif;
     }
-    if sheet_name in headers_map:
-        worksheet = spreadsheet.worksheet(sheet_name)
-        worksheet.append_row(headers_map[sheet_name])
-    return pd.DataFrame()
-
-def save_dataframe(sheet_name: str, df: pd.DataFrame):
-"""حفظ DataFrame بالكامل في ورقة (استبدال المحتوى)"""
-spreadsheet = get_spreadsheet()
-try:
-    worksheet = spreadsheet.worksheet(sheet_name)
-    worksheet.clear()
-except gspread.WorksheetNotFound:
-    worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="20")
-
-if not df.empty:
-    worksheet.update([df.columns.tolist()] + df.values.tolist())
-else:
-    # وضع الرؤوس فقط
-    headers_map = {
-        "Users": ["username", "password", "role", "created_at", "last_login"],
-        "Attendance": ["player_name", "date", "status", "recorded_by", "timestamp"],
-        "Subscriptions": ["player_name", "monthly_fee", "start_date", "end_date", "subscription_status", "notes"],
-        "Payments": ["player_name", "amount", "payment_method", "payment_date", "notes", "receipt_id"]
+    
+    .main-header {
+        text-align: center;
+        padding: 1.5rem;
+        background: linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%);
+        color: white;
+        border-radius: 15px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    if sheet_name in headers_map:
-        worksheet.update([headers_map[sheet_name]])
-
-def append_row(sheet_name: str, row_data: List[Any]):
-"""إضافة صف جديد إلى نهاية الورقة"""
-spreadsheet = get_spreadsheet()
-try:
-    worksheet = spreadsheet.worksheet(sheet_name)
-    worksheet.append_row(row_data)
-except gspread.WorksheetNotFound:
-    worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="20")
-    worksheet.append_row(row_data)
-
-def update_cell(sheet_name: str, row: int, col: int, value: Any):
-"""تحديث خلية محددة"""
-spreadsheet = get_spreadsheet()
-worksheet = spreadsheet.worksheet(sheet_name)
-worksheet.update_cell(row, col, value)
-
-# ============================================================
-# SECTION 5: دوال التحقق من صحة البيانات
-# ============================================================
-
-def is_valid_three_part_name(name: str) -> bool:
-"""
-التحقق من أن الاسم ثلاثي (ثلاثة أجزاء مفصولة بمسافات)
-مثال: أحمد محمد علي -> صحيح
-أحمد محمد -> خطأ (جزئين فقط)
-"""
-if not name or not isinstance(name, str):
-    return False
-name = name.strip()
-if not name:
-    return False
-parts = name.split()
-# يجب أن يكون بالضبط 3 أجزاء وكل جزء غير فارغ
-if len(parts) != 3:
-    return False
-# التحقق من أن كل جزء يتكون من حروف عربية أو إنجليزية (اختياري)
-for part in parts:
-    if len(part) == 0:
-        return False
-return True
-
-def is_username_unique(username: str) -> bool:
-"""التحقق من عدم تكرار اسم المستخدم في قاعدة بيانات المستخدمين"""
-users_df = load_dataframe("Users")
-if users_df.empty:
-    return True
-return username not in users_df["username"].values
-
-def validate_email(email: str) -> bool:
-"""التحقق من صحة البريد الإلكتروني (اختياري، يمكن إضافته لاحقاً)"""
-pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-return re.match(pattern, email) is not None
-
-def validate_phone(phone: str) -> bool:
-"""التحقق من صحة رقم الهاتف المصري (اختياري)"""
-pattern = r'^(01)[0-9]{9}$'
-return re.match(pattern, phone) is not None
-
-def hash_password(password: str) -> str:
-"""تشفير كلمة المرور باستخدام SHA-256"""
-return hashlib.sha256(password.encode()).hexdigest()
-
-# ============================================================
-# SECTION 6: دوال إدارة المستخدمين والجلسات
-# ============================================================
-
-def authenticate_user(username: str, password: str) -> Tuple[bool, Optional[str]]:
-"""
-التحقق من بيانات المستخدم وإرجاع الدور إذا كان صحيحاً.
-"""
-users_df = load_dataframe("Users")
-if users_df.empty:
-    return False, None
-
-# البحث عن المستخدم (بدون تشفير للتبسيط، يمكن إضافة التشفير لاحقاً)
-user_row = users_df[(users_df["username"] == username) & (users_df["password"] == password)]
-if not user_row.empty:
-    role = user_row.iloc[0]["role"]
-    # تحديث آخر تسجيل دخول
-    try:
-        last_login_col = users_df.columns.get_loc("last_login") if "last_login" in users_df.columns else None
-        if last_login_col is not None:
-            row_idx = user_row.index[0]
-            users_df.iloc[row_idx, last_login_col] = datetime.now().isoformat()
-            save_dataframe("Users", users_df)
-    except:
-        pass
-    return True, role
-return False, None
-
-def add_new_user(username: str, password: str, role: str, email: str = "", phone: str = "") -> Tuple[bool, str]:
-"""
-إضافة مستخدم جديد (لاعب فقط - الكابتن يضاف يدوياً في Google Sheets)
-"""
-if not is_valid_three_part_name(username):
-    return False, "⚠️ الاسم يجب أن يكون ثلاثياً (ثلاثة أجزاء) مثال: أحمد محمد علي"
-
-if not is_username_unique(username):
-    return False, "⚠️ اسم المستخدم موجود مسبقاً، الرجاء اختيار اسم آخر"
-
-# التحقق من صحة البريد الإلكتروني إذا تم توفيره
-if email and not validate_email(email):
-    return False, "⚠️ البريد الإلكتروني غير صالح"
-
-# التحقق من صحة رقم الهاتف إذا تم توفيره
-if phone and not validate_phone(phone):
-    return False, "⚠️ رقم الهاتف غير صالح (يجب أن يبدأ بـ 01 ويتبع بـ 9 أرقام)"
-
-users_df = load_dataframe("Users")
-new_row = pd.DataFrame([{
-    "username": username,
-    "password": password,
-    "role": role,
-    "created_at": datetime.now().isoformat(),
-    "last_login": ""
-}])
-users_df = pd.concat([users_df, new_row], ignore_index=True)
-save_dataframe("Users", users_df)
-
-# إنشاء اشتراك افتراضي للاعب الجديد
-if role == "player":
-    subs_df = load_dataframe("Subscriptions")
-    if subs_df.empty or username not in subs_df["player_name"].values:
-        default_sub = pd.DataFrame([{
-            "player_name": username,
-            "monthly_fee": 200.0,
-            "start_date": date.today().isoformat(),
-            "end_date": (date.today() + timedelta(days=30)).isoformat(),
-            "subscription_status": "فعال",
-            "notes": "اشتراك تلقائي عند التسجيل"
-        }])
-        if subs_df.empty:
-            subs_df = default_sub
-        else:
-            subs_df = pd.concat([subs_df, default_sub], ignore_index=True)
-        save_dataframe("Subscriptions", subs_df)
-
-return True, "✅ تمت إضافة المستخدم بنجاح"
-
-def get_all_players() -> List[str]:
-"""إرجاع قائمة بجميع أسماء اللاعبين (الدور = player)"""
-users_df = load_dataframe("Users")
-if users_df.empty:
-    return []
-return users_df[users_df["role"] == "player"]["username"].tolist()
-
-def get_coach_username() -> Optional[str]:
-"""إرجاع اسم مستخدم الكابتن (يفترض وجود كابتن واحد على الأقل)"""
-users_df = load_dataframe("Users")
-if users_df.empty:
-    return None
-coach_row = users_df[users_df["role"] == "coach"]
-if not coach_row.empty:
-    return coach_row.iloc[0]["username"]
-return None
-
-def get_player_details(player_name: str) -> Optional[Dict]:
-"""الحصول على تفاصيل لاعب معين (مثل البريد الإلكتروني، الهاتف)"""
-users_df = load_dataframe("Users")
-if users_df.empty:
-    return None
-player_row = users_df[users_df["username"] == player_name]
-if player_row.empty:
-    return None
-return player_row.iloc[0].to_dict()
-
-# ============================================================
-# SECTION 7: دوال إدارة الحضور والغياب (محسنة)
-# ============================================================
-
-def record_attendance_multi(players: List[str], status: str, recorded_by: str) -> int:
-"""
-تسجيل حضور/غياب لمجموعة من اللاعبين لتاريخ اليوم.
-إرجاع عدد اللاعبين الذين تم تسجيلهم بنجاح.
-"""
-if not players:
-    return 0
-
-today_str = date.today().isoformat()
-timestamp = datetime.now().isoformat()
-attendance_df = load_dataframe("Attendance")
-
-count = 0
-for player in players:
-    if attendance_df.empty:
-        new_row = pd.DataFrame([{
-            "player_name": player,
-            "date": today_str,
-            "status": status,
-            "recorded_by": recorded_by,
-            "timestamp": timestamp
-        }])
-        attendance_df = new_row
-    else:
-        # التحقق من وجود سجل لليوم
-        existing_idx = attendance_df[(attendance_df["player_name"] == player) & 
-                                      (attendance_df["date"] == today_str)].index
-        if len(existing_idx) > 0:
-            # تحديث السجل الموجود
-            attendance_df.loc[existing_idx, "status"] = status
-            attendance_df.loc[existing_idx, "recorded_by"] = recorded_by
-            attendance_df.loc[existing_idx, "timestamp"] = timestamp
-        else:
-            # إضافة سجل جديد
-            new_row = pd.DataFrame([{
-                "player_name": player,
-                "date": today_str,
-                "status": status,
-                "recorded_by": recorded_by,
-                "timestamp": timestamp
-            }])
-            attendance_df = pd.concat([attendance_df, new_row], ignore_index=True)
-    count += 1
-
-save_dataframe("Attendance", attendance_df)
-return count
-
-def get_player_attendance_history(player_name: str, limit: int = None) -> pd.DataFrame:
-"""
-استرجاع سجل الحضور والغياب للاعب معين، مع إمكانية تحديد عدد السجلات.
-"""
-attendance_df = load_dataframe("Attendance")
-if attendance_df.empty:
-    return pd.DataFrame()
-player_att = attendance_df[attendance_df["player_name"] == player_name].copy()
-if not player_att.empty:
-    player_att["date"] = pd.to_datetime(player_att["date"])
-    player_att = player_att.sort_values("date", ascending=False)
-    if limit:
-        player_att = player_att.head(limit)
-return player_att
-
-def get_attendance_percentage(player_name: str) -> float:
-"""حساب نسبة الحضور للاعب"""
-player_att = get_player_attendance_history(player_name)
-if player_att.empty:
-    return 0.0
-total = len(player_att)
-present = len(player_att[player_att["status"] == "Present"])
-return (present / total * 100) if total > 0 else 0.0
-
-def get_absence_count(player_name: str) -> int:
-"""حساب عدد مرات الغياب للاعب"""
-player_att = get_player_attendance_history(player_name)
-if player_att.empty:
-    return 0
-return len(player_att[player_att["status"] == "Absent"])
-
-def get_today_attendance() -> pd.DataFrame:
-"""الحصول على حالة الحضور والغياب ليوم اليوم"""
-attendance_df = load_dataframe("Attendance")
-if attendance_df.empty:
-    return pd.DataFrame()
-today_str = date.today().isoformat()
-today_att = attendance_df[attendance_df["date"] == today_str].copy()
-return today_att
-
-def get_attendance_summary(start_date: date = None, end_date: date = None) -> pd.DataFrame:
-"""
-الحصول على ملخص الحضور لكل لاعب خلال فترة زمنية محددة.
-إذا لم يتم تحديد تواريخ، يتم حساب الإحصائيات على كل البيانات.
-"""
-attendance_df = load_dataframe("Attendance")
-if attendance_df.empty:
-    return pd.DataFrame()
-
-attendance_df["date"] = pd.to_datetime(attendance_df["date"])
-
-if start_date:
-    attendance_df = attendance_df[attendance_df["date"] >= pd.to_datetime(start_date)]
-if end_date:
-    attendance_df = attendance_df[attendance_df["date"] <= pd.to_datetime(end_date)]
-
-if attendance_df.empty:
-    return pd.DataFrame()
-
-summary = attendance_df.groupby("player_name").agg(
-    total_sessions=("status", "count"),
-    present=("status", lambda x: (x == "Present").sum()),
-    absent=("status", lambda x: (x == "Absent").sum())
-).reset_index()
-
-summary["attendance_percentage"] = (summary["present"] / summary["total_sessions"] * 100).round(1)
-summary = summary.sort_values("attendance_percentage", ascending=False)
-return summary
-
-def get_weekly_attendance() -> pd.DataFrame:
-"""
-تحليل الحضور الأسبوعي (آخر 7 أيام)
-"""
-end_date = date.today()
-start_date = end_date - timedelta(days=7)
-summary = get_attendance_summary(start_date, end_date)
-if not summary.empty:
-    summary["week"] = f"{start_date.isoformat()} إلى {end_date.isoformat()}"
-return summary
-
-def get_monthly_attendance(year: int = None, month: int = None) -> pd.DataFrame:
-"""
-تحليل الحضور الشهري.
-إذا لم يتم تحديد السنة والشهر، يتم استخدام الشهر الحالي.
-"""
-if year is None or month is None:
-    today = date.today()
-    year = today.year
-    month = today.month
-start_date = date(year, month, 1)
-if month == 12:
-    end_date = date(year + 1, 1, 1) - timedelta(days=1)
-else:
-    end_date = date(year, month + 1, 1) - timedelta(days=1)
-return get_attendance_summary(start_date, end_date)
-
-# ============================================================
-# SECTION 8: دوال إدارة الاشتراكات والمدفوعات (محسنة)
-# ============================================================
-
-def get_player_subscription(player_name: str) -> Optional[Dict]:
-"""استرجاع بيانات اشتراك لاعب معين"""
-subs_df = load_dataframe("Subscriptions")
-if subs_df.empty:
-    return None
-player_sub = subs_df[subs_df["player_name"] == player_name]
-if player_sub.empty:
-    return None
-return player_sub.iloc[0].to_dict()
-
-def update_player_subscription(
-player_name: str,
-monthly_fee: float,
-start_date: str,
-end_date: str,
-status: str,
-notes: str = ""
-) -> bool:
-"""تحديث أو إضافة اشتراك لاعب"""
-subs_df = load_dataframe("Subscriptions")
-
-if subs_df.empty:
-    new_row = pd.DataFrame([{
-        "player_name": player_name,
-        "monthly_fee": monthly_fee,
-        "start_date": start_date,
-        "end_date": end_date,
-        "subscription_status": status,
-        "notes": notes
-    }])
-    subs_df = new_row
-else:
-    if player_name in subs_df["player_name"].values:
-        # تحديث السجل الموجود
-        subs_df.loc[subs_df["player_name"] == player_name, "monthly_fee"] = monthly_fee
-        subs_df.loc[subs_df["player_name"] == player_name, "start_date"] = start_date
-        subs_df.loc[subs_df["player_name"] == player_name, "end_date"] = end_date
-        subs_df.loc[subs_df["player_name"] == player_name, "subscription_status"] = status
-        if notes:
-            subs_df.loc[subs_df["player_name"] == player_name, "notes"] = notes
-    else:
-        # إضافة سجل جديد
-        new_row = pd.DataFrame([{
-            "player_name": player_name,
-            "monthly_fee": monthly_fee,
-            "start_date": start_date,
-            "end_date": end_date,
-            "subscription_status": status,
-            "notes": notes
-        }])
-        subs_df = pd.concat([subs_df, new_row], ignore_index=True)
-
-save_dataframe("Subscriptions", subs_df)
-return True
-
-def add_payment(
-player_name: str,
-amount: float,
-payment_method: str,
-notes: str = ""
-) -> bool:
-"""
-تسجيل دفعة جديدة للاعب مع إنشاء رقم إيصال فريد.
-"""
-payment_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-# إنشاء رقم إيصال عشوائي
-receipt_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-append_row("Payments", [player_name, amount, payment_method, payment_date, notes, receipt_id])
-return True
-
-def get_player_payments(player_name: str) -> pd.DataFrame:
-"""استرجاع جميع دفعات لاعب معين"""
-payments_df = load_dataframe("Payments")
-if payments_df.empty:
-    return pd.DataFrame()
-player_payments = payments_df[payments_df["player_name"] == player_name].copy()
-if not player_payments.empty:
-    player_payments["amount"] = pd.to_numeric(player_payments["amount"], errors='coerce')
-    player_payments["payment_date"] = pd.to_datetime(player_payments["payment_date"])
-    player_payments = player_payments.sort_values("payment_date", ascending=False)
-return player_payments
-
-def get_total_paid(player_name: str) -> float:
-"""حساب إجمالي المبلغ المدفوع للاعب"""
-payments = get_player_payments(player_name)
-if payments.empty:
-    return 0.0
-return payments["amount"].sum()
-
-def calculate_total_due(player_name: str) -> float:
-"""
-حساب إجمالي المبلغ المستحق على اللاعب بناءً على مدة الاشتراك.
-"""
-sub = get_player_subscription(player_name)
-if not sub:
-    return 0.0
-
-try:
-    start = datetime.strptime(sub["start_date"], "%Y-%m-%d").date()
-    end = datetime.strptime(sub["end_date"], "%Y-%m-%d").date()
-    # حساب عدد الأشهر (شهر كامل لكل شهر يبدأ من start_date)
-    months = (end.year - start.year) * 12 + (end.month - start.month) + 1
-    if months <= 0:
-        months = 1
-    monthly_fee = float(sub["monthly_fee"])
-    return months * monthly_fee
-except Exception as e:
-    return 0.0
-
-def calculate_remaining_amount(player_name: str) -> float:
-"""حساب المبلغ المتبقي على اللاعب = المستحق - المدفوع"""
-total_due = calculate_total_due(player_name)
-total_paid = get_total_paid(player_name)
-return max(total_due - total_paid, 0.0)
-
-def get_all_subscriptions() -> pd.DataFrame:
-"""الحصول على جميع الاشتراكات"""
-return load_dataframe("Subscriptions")
-
-def get_subscription_status_summary() -> pd.DataFrame:
-"""الحصول على ملخص حالة الاشتراكات لجميع اللاعبين مع المبالغ المتبقية"""
-subs_df = load_dataframe("Subscriptions")
-if subs_df.empty:
-    return pd.DataFrame()
-
-summary = []
-for _, row in subs_df.iterrows():
-    player = row["player_name"]
-    remaining = calculate_remaining_amount(player)
-    summary.append({
-        "اللاعب": player,
-        "القيمة الشهرية (جنيه)": row["monthly_fee"],
-        "تاريخ البداية": row["start_date"],
-        "تاريخ النهاية": row["end_date"],
-        "الحالة": row["subscription_status"],
-        "المتبقي (جنيه)": round(remaining, 2)
-    })
-return pd.DataFrame(summary)
-
-# ============================================================
-# SECTION 9: دوال التقارير والإحصائيات المتقدمة
-# ============================================================
-
-def get_financial_summary() -> Dict:
-"""
-الحصول على ملخص مالي عام للأكاديمية:
-- إجمالي التحصيل
-- إجمالي المتوقع تحصيله
-- إجمالي المتأخرات
-- عدد الدفعات
-- متوسط قيمة الدفعة
-"""
-payments_df = load_dataframe("Payments")
-subs_df = load_dataframe("Subscriptions")
-
-total_collected = 0.0
-num_payments = 0
-if not payments_df.empty:
-    payments_df["amount"] = pd.to_numeric(payments_df["amount"], errors='coerce')
-    total_collected = payments_df["amount"].sum()
-    num_payments = len(payments_df)
-
-avg_payment = total_collected / num_payments if num_payments > 0 else 0.0
-
-total_expected = 0.0
-if not subs_df.empty:
-    for _, row in subs_df.iterrows():
-        try:
-            start = datetime.strptime(row["start_date"], "%Y-%m-%d").date()
-            end = datetime.strptime(row["end_date"], "%Y-%m-%d").date()
-            months = (end.year - start.year) * 12 + (end.month - start.month) + 1
-            if months <= 0:
-                months = 1
-            total_expected += months * float(row["monthly_fee"])
-        except:
-            pass
-
-return {
-    "total_collected": total_collected,
-    "total_expected": total_expected,
-    "outstanding": max(total_expected - total_collected, 0.0),
-    "num_payments": num_payments,
-    "avg_payment": avg_payment
-}
-
-def get_monthly_collection(year: int = None) -> pd.DataFrame:
-"""
-تحليل المدفوعات الشهرية لسنة محددة.
-إذا لم يتم تحديد السنة، يتم استخدام السنة الحالية.
-"""
-if year is None:
-    year = date.today().year
-
-payments_df = load_dataframe("Payments")
-if payments_df.empty:
-    return pd.DataFrame()
-
-payments_df["payment_date"] = pd.to_datetime(payments_df["payment_date"])
-payments_df = payments_df[payments_df["payment_date"].dt.year == year]
-if payments_df.empty:
-    return pd.DataFrame()
-
-payments_df["month"] = payments_df["payment_date"].dt.strftime("%B")
-# ترتيب الأشهر
-month_order = ["January", "February", "March", "April", "May", "June", 
-               "July", "August", "September", "October", "November", "December"]
-monthly = payments_df.groupby("month")["amount"].sum().reset_index()
-monthly["month"] = pd.Categorical(monthly["month"], categories=month_order, ordered=True)
-monthly = monthly.sort_values("month").reset_index(drop=True)
-return monthly
-
-def get_payment_method_distribution() -> pd.DataFrame:
-"""توزيع المدفوعات حسب طريقة الدفع"""
-payments_df = load_dataframe("Payments")
-if payments_df.empty:
-    return pd.DataFrame()
-distribution = payments_df.groupby("payment_method")["amount"].sum().reset_index()
-distribution = distribution.sort_values("amount", ascending=False)
-return distribution
-
-def get_attendance_trend(player_name: str = None) -> pd.DataFrame:
-"""
-تحليل اتجاه الحضور عبر الزمن (شهرياً)
-"""
-attendance_df = load_dataframe("Attendance")
-if attendance_df.empty:
-    return pd.DataFrame()
-
-attendance_df["date"] = pd.to_datetime(attendance_df["date"])
-attendance_df["month"] = attendance_df["date"].dt.strftime("%Y-%m")
-
-if player_name:
-    attendance_df = attendance_df[attendance_df["player_name"] == player_name]
-
-if attendance_df.empty:
-    return pd.DataFrame()
-
-monthly_stats = attendance_df.groupby(["month", "status"]).size().unstack(fill_value=0)
-if "Present" not in monthly_stats.columns:
-    monthly_stats["Present"] = 0
-if "Absent" not in monthly_stats.columns:
-    monthly_stats["Absent"] = 0
-
-monthly_stats["total"] = monthly_stats["Present"] + monthly_stats["Absent"]
-monthly_stats["percentage"] = (monthly_stats["Present"] / monthly_stats["total"] * 100).round(1)
-monthly_stats = monthly_stats.reset_index()
-return monthly_stats
-
-def get_top_attendance_players(limit: int = 5) -> pd.DataFrame:
-"""أفضل اللاعبين من حيث نسبة الحضور"""
-summary = get_attendance_summary()
-if summary.empty:
-    return pd.DataFrame()
-return summary.nlargest(limit, "attendance_percentage")[["player_name", "attendance_percentage"]]
-
-def get_bottom_attendance_players(limit: int = 5) -> pd.DataFrame:
-"""أسوأ اللاعبين من حيث نسبة الحضور"""
-summary = get_attendance_summary()
-if summary.empty:
-    return pd.DataFrame()
-return summary.nsmallest(limit, "attendance_percentage")[["player_name", "attendance_percentage"]]
-
-# ============================================================
-# SECTION 10: دوال واجهة المستخدم (UI Components)
-# ============================================================
-
-def display_header(title: str, subtitle: str = ""):
-"""عرض رأس الصفحة بتصميم موحد"""
-st.markdown(f"""
-<div class="main-header">
-    <h1>⚽ {title}</h1>
-    <p>{subtitle}</p>
-</div>
-""", unsafe_allow_html=True)
-
-def display_metric_card(label: str, value: str, icon: str = "📊", delta: str = None):
-"""عرض بطاقة مقياس مع إمكانية إضافة تغيير"""
-delta_html = f'<div style="font-size:0.8rem; color:{ "green" if delta and "+" in delta else "red" if delta else "gray"};">{delta if delta else ""}</div>' if delta else ""
-st.markdown(f"""
-<div class="metric-card">
-    <div style="font-size: 2rem;">{icon}</div>
-    <div class="metric-value">{value}</div>
-    <div class="metric-label">{label}</div>
-    {delta_html}
-</div>
-""", unsafe_allow_html=True)
-
-def show_sidebar_user_info():
-"""عرض معلومات المستخدم في الشريط الجانبي"""
-if "username" in st.session_state:
-    role_icon = "👨‍🏫" if st.session_state["role"] == "coach" else "⚽"
-    role_name = "كابتن" if st.session_state["role"] == "coach" else "لاعب"
-    st.sidebar.markdown(f"""
-    <div class="user-info">
-        <div style="font-size: 2rem;">{role_icon}</div>
-        <div style="font-weight: bold; font-size: 1.1rem;">{st.session_state['username']}</div>
-        <div style="font-size: 0.8rem; opacity: 0.9;">{role_name}</div>
-    </div>
+    
+    .card {
+        background: white;
+        border-radius: 15px;
+        padding: 1.5rem;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        margin-bottom: 1rem;
+        border: 1px solid #e0e0e0;
+    }
+    
+    .metric-card {
+        background: linear-gradient(145deg, #f5f5f5 0%, #ffffff 100%);
+        border-radius: 12px;
+        padding: 1.2rem;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        border-left: 4px solid #2e7d32;
+    }
+    
+    .stButton button {
+        background-color: #2e7d32;
+        color: white;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-weight: bold;
+        border: none;
+        transition: all 0.3s;
+    }
+    
+    .stButton button:hover {
+        background-color: #1b5e20;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    .logout-btn {
+        background-color: #d32f2f !important;
+    }
+    
+    .logout-btn:hover {
+        background-color: #b71c1c !important;
+    }
+    
+    .dataframe {
+        border-radius: 10px;
+        overflow: hidden;
+        border: 1px solid #e0e0e0;
+    }
+    
+    .success-message {
+        background-color: #e8f5e9;
+        color: #2e7d32;
+        padding: 1rem;
+        border-radius: 8px;
+        border-right: 4px solid #2e7d32;
+    }
+    
+    .error-message {
+        background-color: #ffebee;
+        color: #c62828;
+        padding: 1rem;
+        border-radius: 8px;
+        border-right: 4px solid #c62828;
+    }
+    </style>
     """, unsafe_allow_html=True)
 
-def logout_button():
-"""زر تسجيل الخروج مع تأكيد"""
-if st.sidebar.button("🚪 تسجيل خروج", use_container_width=True):
-    # مسح جميع مفاتيح الجلسة
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.rerun()
+# ==================== إدارة الجلسات ====================
+class SessionManager:
+    @staticmethod
+    def init_session():
+        """تهيئة متغيرات الجلسة الافتراضية"""
+        defaults = {
+            "logged_in": False,
+            "username": None,
+            "role": None,
+            "show_register": False,
+            "current_page": "login",
+            "last_activity": time.time()
+        }
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+    
+    @staticmethod
+    def login(username: str, role: str):
+        """تسجيل دخول المستخدم وحفظ البيانات في الجلسة"""
+        st.session_state.logged_in = True
+        st.session_state.username = username
+        st.session_state.role = role
+        st.session_state.last_activity = time.time()
+    
+    @staticmethod
+    def logout():
+        """مسح جميع بيانات الجلسة"""
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        SessionManager.init_session()
+    
+    @staticmethod
+    def check_auth():
+        """التحقق من صلاحية الجلسة وإعادة التوجيه إذا لزم الأمر"""
+        if not st.session_state.logged_in:
+            st.warning("الرجاء تسجيل الدخول أولاً")
+            st.stop()
+        
+        # التحقق من انتهاء الجلسة (ساعتين)
+        if time.time() - st.session_state.last_activity > 7200:
+            SessionManager.logout()
+            st.warning("انتهت الجلسة، الرجاء تسجيل الدخول مرة أخرى")
+            st.stop()
+        
+        st.session_state.last_activity = time.time()
 
-def show_notification(message: str, type: str = "success"):
-"""عرض إشعار مؤقت"""
-if type == "success":
-    st.success(message)
-elif type == "error":
-    st.error(message)
-elif type == "warning":
-    st.warning(message)
-elif type == "info":
-    st.info(message)
-time.sleep(1.5)
-st.rerun()
+# ==================== الاتصال بقاعدة البيانات (Google Sheets) ====================
+class GoogleSheetsDB:
+    def __init__(self):
+        """تهيئة الاتصال بـ Google Sheets باستخدام بيانات الاعتماد من secrets"""
+        self.spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
+        self._client = None
+        self._spreadsheet = None
+        self._init_connection()
+    
+    def _init_connection(self):
+        """إنشاء اتصال مع Google Sheets API"""
+        try:
+            scopes = [
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+            service_account_info = st.secrets["google"]["service_account"]
+            
+            # التعامل مع المفتاح الخاص بشكل صحيح
+            if isinstance(service_account_info, dict):
+                creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
+            else:
+                # في حال كان secrets يحتوي على نص JSON مباشر
+                creds = Credentials.from_service_account_info(json.loads(service_account_info), scopes=scopes)
+            
+            self._client = gspread.authorize(creds)
+            self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
+        except Exception as e:
+            st.error(f"❌ فشل الاتصال بـ Google Sheets: {str(e)}")
+            st.stop()
+    
+    def get_or_create_worksheet(self, title: str, headers: List[str]) -> gspread.Worksheet:
+        """الحصول على ورقة عمل أو إنشائها إذا لم تكن موجودة"""
+        try:
+            ws = self._spreadsheet.worksheet(title)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = self._spreadsheet.add_worksheet(title=title, rows=1000, cols=len(headers))
+            ws.append_row(headers)
+        return ws
+    
+    # ========== عمليات المستخدمين ==========
+    def get_users_sheet(self) -> gspread.Worksheet:
+        return self.get_or_create_worksheet("Users", ["username", "password", "role", "created_at"])
+    
+    def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
+        """التحقق من بيانات المستخدم وإرجاع بياناته إذا كانت صحيحة"""
+        ws = self.get_users_sheet()
+        users = ws.get_all_records()
+        for user in users:
+            if user["username"] == username and user["password"] == password:
+                return user
+        return None
+    
+    def user_exists(self, username: str) -> bool:
+        """التحقق مما إذا كان اسم المستخدم موجوداً"""
+        ws = self.get_users_sheet()
+        users = ws.get_all_records()
+        return any(u["username"] == username for u in users)
+    
+    def add_user(self, username: str, password: str, role: str) -> Tuple[bool, str]:
+        """إضافة مستخدم جديد"""
+        if not self._validate_three_part_name(username):
+            return False, "❌ يجب أن يكون الاسم ثلاثياً على الأقل (مثال: أحمد محمد علي)"
+        
+        if self.user_exists(username):
+            return False, "❌ اسم المستخدم موجود مسبقاً"
+        
+        if len(password) < 4:
+            return False, "❌ كلمة المرور يجب أن تكون 4 أحرف على الأقل"
+        
+        ws = self.get_users_sheet()
+        ws.append_row([username, password, role, str(date.today())])
+        return True, "✅ تم إنشاء الحساب بنجاح"
+    
+    def get_all_players(self) -> List[str]:
+        """الحصول على قائمة بأسماء جميع اللاعبين"""
+        ws = self.get_users_sheet()
+        users = ws.get_all_records()
+        return [u["username"] for u in users if u["role"] == "player"]
+    
+    def update_user_password(self, username: str, new_password: str) -> bool:
+        """تحديث كلمة مرور المستخدم"""
+        ws = self.get_users_sheet()
+        users = ws.get_all_records()
+        for i, user in enumerate(users, start=2):
+            if user["username"] == username:
+                ws.update(f'B{i}', new_password)
+                return True
+        return False
+    
+    # ========== عمليات الحضور ==========
+    def get_attendance_sheet(self) -> gspread.Worksheet:
+        return self.get_or_create_worksheet("Attendance", 
+            ["player_name", "date", "status", "recorded_by", "recorded_at"])
+    
+    def record_attendance(self, date_str: str, present_players: List[str], 
+                          coach_name: str) -> bool:
+        """تسجيل حضور وغياب اللاعبين لتاريخ محدد"""
+        ws = self.get_attendance_sheet()
+        all_players = self.get_all_players()
+        
+        # حذف السجلات القديمة لنفس التاريخ
+        records = ws.get_all_records()
+        rows_to_delete = []
+        for i, record in enumerate(records, start=2):
+            if record["date"] == date_str:
+                rows_to_delete.append(i)
+        
+        for row in sorted(rows_to_delete, reverse=True):
+            ws.delete_rows(row)
+        
+        # إضافة السجلات الجديدة
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for player in all_players:
+            status = "Present" if player in present_players else "Absent"
+            ws.append_row([player, date_str, status, coach_name, timestamp])
+        
+        return True
+    
+    def get_attendance_for_player(self, player_name: str) -> pd.DataFrame:
+        """الحصول على سجل حضور لاعب معين"""
+        ws = self.get_attendance_sheet()
+        data = ws.get_all_records()
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        if not df.empty:
+            return df[df["player_name"] == player_name].sort_values("date", ascending=False)
+        return df
+    
+    def get_attendance_summary(self) -> pd.DataFrame:
+        """الحصول على ملخص حضور جميع اللاعبين"""
+        ws = self.get_attendance_sheet()
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        summary = df.groupby(["player_name", "status"]).size().unstack(fill_value=0)
+        summary["Total"] = summary.sum(axis=1)
+        if "Present" in summary.columns:
+            summary["Attendance %"] = (summary["Present"] / summary["Total"] * 100).round(1)
+        else:
+            summary["Attendance %"] = 0
+        return summary.reset_index()
+    
+    # ========== عمليات الاشتراكات ==========
+    def get_subscriptions_sheet(self) -> gspread.Worksheet:
+        return self.get_or_create_worksheet("Subscriptions",
+            ["player_name", "monthly_fee", "start_date", "end_date", 
+             "subscription_status", "notes", "created_at"])
+    
+    def add_subscription(self, player_name: str, monthly_fee: float, 
+                        start_date: str, end_date: str, status: str, notes: str = "") -> bool:
+        """إضافة اشتراك جديد"""
+        ws = self.get_subscriptions_sheet()
+        ws.append_row([
+            player_name, monthly_fee, start_date, end_date, 
+            status, notes, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ])
+        return True
+    
+    def get_player_subscriptions(self, player_name: str) -> pd.DataFrame:
+        """الحصول على اشتراكات لاعب معين"""
+        ws = self.get_subscriptions_sheet()
+        data = ws.get_all_records()
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        if not df.empty:
+            return df[df["player_name"] == player_name].sort_values("start_date", ascending=False)
+        return df
+    
+    def get_active_subscription(self, player_name: str) -> Optional[Dict]:
+        """الحصول على الاشتراك النشط للاعب"""
+        df = self.get_player_subscriptions(player_name)
+        if not df.empty:
+            active = df[df["subscription_status"] == "نشط"]
+            if not active.empty:
+                return active.iloc[0].to_dict()
+        return None
+    
+    def update_subscription(self, row_index: int, updates: Dict) -> bool:
+        """تحديث بيانات اشتراك موجود"""
+        ws = self.get_subscriptions_sheet()
+        # تحويل row_index من dataframe إلى row في sheet (يبدأ من 2)
+        sheet_row = row_index + 2
+        for col_name, value in updates.items():
+            # تحديد رقم العمود بناءً على الاسم
+            headers = ws.row_values(1)
+            if col_name in headers:
+                col_idx = headers.index(col_name) + 1
+                ws.update_cell(sheet_row, col_idx, value)
+        return True
+    
+    # ========== عمليات المدفوعات ==========
+    def get_payments_sheet(self) -> gspread.Worksheet:
+        return self.get_or_create_worksheet("Payments",
+            ["player_name", "amount", "payment_method", "payment_date", 
+             "notes", "recorded_by", "recorded_at"])
+    
+    def add_payment(self, player_name: str, amount: float, payment_method: str,
+                   payment_date: str, notes: str, recorded_by: str) -> bool:
+        """تسجيل دفعة جديدة"""
+        ws = self.get_payments_sheet()
+        ws.append_row([
+            player_name, amount, payment_method, payment_date, 
+            notes, recorded_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ])
+        return True
+    
+    def get_player_payments(self, player_name: str) -> pd.DataFrame:
+        """الحصول على مدفوعات لاعب معين"""
+        ws = self.get_payments_sheet()
+        data = ws.get_all_records()
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        if not df.empty:
+            return df[df["player_name"] == player_name].sort_values("payment_date", ascending=False)
+        return df
+    
+    def get_all_payments(self) -> pd.DataFrame:
+        """الحصول على جميع المدفوعات"""
+        ws = self.get_payments_sheet()
+        data = ws.get_all_records()
+        return pd.DataFrame(data) if data else pd.DataFrame()
+    
+    def update_payment(self, row_index: int, updates: Dict) -> bool:
+        """تحديث بيانات دفعة موجودة"""
+        ws = self.get_payments_sheet()
+        sheet_row = row_index + 2
+        headers = ws.row_values(1)
+        for col_name, value in updates.items():
+            if col_name in headers:
+                col_idx = headers.index(col_name) + 1
+                ws.update_cell(sheet_row, col_idx, value)
+        return True
+    
+    def delete_payment(self, row_index: int) -> bool:
+        """حذف دفعة"""
+        ws = self.get_payments_sheet()
+        ws.delete_rows(row_index + 2)
+        return True
+    
+    # ========== دوال مساعدة ==========
+    @staticmethod
+    def _validate_three_part_name(name: str) -> bool:
+        """التحقق من أن الاسم يتكون من ثلاثة أجزاء على الأقل"""
+        if not name or not isinstance(name, str):
+            return False
+        parts = name.strip().split()
+        return len(parts) >= 3
+    
+    @staticmethod
+    def validate_three_part_name(name: str) -> Tuple[bool, str]:
+        """التحقق من صحة الاسم الثلاثي مع رسالة خطأ"""
+        if not name or not isinstance(name, str):
+            return False, "الاسم غير صالح"
+        parts = name.strip().split()
+        if len(parts) < 3:
+            return False, "يجب أن يتكون الاسم من ثلاثة أجزاء على الأقل (مثال: أحمد محمد علي)"
+        if any(len(part) < 2 for part in parts):
+            return False, "يجب أن يتكون كل جزء من الاسم من حرفين على الأقل"
+        # السماح بالأحرف العربية والإنجليزية والمسافات فقط
+        if not re.match(r'^[\u0600-\u06FFa-zA-Z\s]+$', name):
+            return False, "يجب أن يحتوي الاسم على أحرف عربية أو إنجليزية فقط"
+        return True, ""
 
-# ============================================================
-# SECTION 11: صفحة تسجيل الدخول (Login Page)
-# ============================================================
+# ==================== واجهات المستخدم ====================
+
+def show_logo():
+    """عرض شعار الأكاديمية"""
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.markdown("""
+        <div class="main-header">
+            <h1>⚽ الكوتش أكاديمي</h1>
+            <h3>نظام إدارة الحضور والاشتراكات</h3>
+        </div>
+        """, unsafe_allow_html=True)
 
 def login_page():
-"""
-عرض صفحة تسجيل الدخول مع تصميم جذاب.
-"""
-display_header("الكوتش أكاديمي", "نظام إدارة الحضور والاشتراكات")
-
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    st.markdown("### 🔐 تسجيل الدخول")
-    with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("اسم المستخدم (الاسم الثلاثي)", placeholder="مثال: أحمد محمد علي")
-        password = st.text_input("كلمة المرور", type="password", placeholder="********")
-        submitted = st.form_submit_button("دخول", use_container_width=True)
-        
-        if submitted:
-            if not username or not password:
-                st.error("⚠️ الرجاء إدخال اسم المستخدم وكلمة المرور")
-            elif not is_valid_three_part_name(username):
-                st.error("⚠️ اسم المستخدم يجب أن يكون ثلاثياً (ثلاثة أجزاء) مثل: أحمد محمد علي")
-            else:
-                success, role = authenticate_user(username, password)
-                if success:
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = username
-                    st.session_state["role"] = role
-                    st.success(f"✓ مرحباً {username}")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
+    """صفحة تسجيل الدخول"""
+    show_logo()
     
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; font-size: 0.8rem;">
-    <p>للتواصل مع الدعم الفني: support@elcoach.com</p>
-    <p>نسخة التطبيق: 2.0.0</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ============================================================
-# SECTION 12: لوحة تحكم الكابتن (Coach Dashboard)
-# ============================================================
-
-def coach_dashboard():
-"""
-عرض لوحة تحكم الكابتن بجميع التبويبات والميزات المتقدمة.
-"""
-display_header("لوحة تحكم الكابتن", "إدارة الحضور، الاشتراكات، والمدفوعات")
-
-# عرض معلومات المستخدم في الشريط الجانبي
-show_sidebar_user_info()
-logout_button()
-
-# إحصائيات سريعة في الشريط الجانبي
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📊 إحصائيات سريعة")
-players_count = len(get_all_players())
-st.sidebar.metric("عدد اللاعبين", players_count)
-
-today_att = get_today_attendance()
-if not today_att.empty:
-    present_today = len(today_att[today_att["status"] == "Present"])
-    st.sidebar.metric("الحضور اليوم", f"{present_today} / {players_count}")
-else:
-    st.sidebar.metric("الحضور اليوم", "0 / {}".format(players_count))
-
-financial = get_financial_summary()
-st.sidebar.metric("إجمالي التحصيل", f"{financial['total_collected']:.0f} جنيه")
-st.sidebar.metric("المتأخرات", f"{financial['outstanding']:.0f} جنيه")
-
-# إنشاء التبويبات الرئيسية
-tabs = st.tabs([
-    "📋 الحضور والغياب",
-    "💰 الاشتراكات والدفعات",
-    "👥 إدارة اللاعبين",
-    "📊 التقارير والإحصائيات",
-    "⚙️ إعدادات متقدمة"
-])
-
-# ========== التبويب الأول: الحضور والغياب ==========
-with tabs[0]:
-    st.subheader("تسجيل الحضور والغياب")
-    
-    players = get_all_players()
-    if not players:
-        st.warning("⚠️ لا يوجد لاعبون مسجلون. قم بإضافة لاعبين من تبويب إدارة اللاعبين.")
-    else:
-        # اختيار متعدد للاعبين
-        selected_players = st.multiselect(
-            "اختر اللاعبين",
-            players,
-            help="يمكنك اختيار أكثر من لاعب لتسجيل الحضور أو الغياب دفعة واحدة"
-        )
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.container():
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align: center;'>🔐 تسجيل الدخول</h3>", unsafe_allow_html=True)
+            
+            username = st.text_input("👤 الاسم الثلاثي (اسم المستخدم)", 
+                                    placeholder="أحمد محمد علي",
+                                    key="login_username")
+            password = st.text_input("🔒 كلمة المرور", type="password", key="login_password")
+            
+            col_a, col_b = st.columns(2)
+            with col_a:
+                login_btn = st.button("🚪 دخول", type="primary", use_container_width=True)
+            with col_b:
+                register_btn = st.button("📝 إنشاء حساب جديد", use_container_width=True)
+            
+            if login_btn:
+                if not username or not password:
+                    st.error("الرجاء إدخال اسم المستخدم وكلمة المرور")
+                else:
+                    db = GoogleSheetsDB()
+                    user = db.authenticate_user(username, password)
+                    if user:
+                        SessionManager.login(username, user["role"])
+                        st.success("تم تسجيل الدخول بنجاح! جاري التحويل...")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة")
+            
+            if register_btn:
+                st.session_state.show_register = True
+                st.rerun()
+            
+            st.markdown("</div>", unsafe_allow_html=True)
         
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            if st.button("✅ تسجيل حضور", use_container_width=True):
-                if selected_players:
-                    with st.spinner("جاري تسجيل الحضور..."):
-                        count = record_attendance_multi(selected_players, "Present", st.session_state["username"])
-                    st.success(f"✓ تم تسجيل حضور {count} لاعب")
-                    time.sleep(0.5)
-                    st.rerun()
+        # معلومات توضيحية
+        with st.expander("ℹ️ معلومات هامة"):
+            st.markdown("""
+            - يجب أن يكون اسم المستخدم **ثلاثياً** (مثال: أحمد محمد علي)
+            - كلمة المرور يجب أن تكون 4 أحرف على الأقل
+            - إذا كنت كابتن، استخدم بيانات الدخول الخاصة بك
+            - اللاعبون الجدد يمكنهم إنشاء حساب من خلال زر "إنشاء حساب جديد"
+            """)
+
+def register_page():
+    """صفحة إنشاء حساب جديد"""
+    show_logo()
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        with st.container():
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align: center;'>📝 إنشاء حساب لاعب جديد</h3>", unsafe_allow_html=True)
+            
+            new_username = st.text_input("👤 الاسم الثلاثي (مطلوب)", 
+                                        placeholder="أحمد محمد علي",
+                                        help="يجب أن يكون الاسم ثلاثياً على الأقل")
+            new_password = st.text_input("🔒 كلمة المرور", type="password",
+                                        help="4 أحرف على الأقل")
+            confirm_password = st.text_input("🔒 تأكيد كلمة المرور", type="password")
+            
+            if st.button("✅ تسجيل", type="primary", use_container_width=True):
+                # التحقق من صحة الاسم الثلاثي
+                db = GoogleSheetsDB()
+                valid, msg = db.validate_three_part_name(new_username)
+                if not valid:
+                    st.error(msg)
+                elif new_password != confirm_password:
+                    st.error("❌ كلمة المرور غير متطابقة")
+                elif len(new_password) < 4:
+                    st.error("❌ كلمة المرور يجب أن تكون 4 أحرف على الأقل")
                 else:
-                    st.warning("⚠️ الرجاء اختيار لاعبين أولاً")
-        with col2:
-            if st.button("❌ تسجيل غياب", use_container_width=True):
-                if selected_players:
-                    with st.spinner("جاري تسجيل الغياب..."):
-                        count = record_attendance_multi(selected_players, "Absent", st.session_state["username"])
-                    st.success(f"✓ تم تسجيل غياب {count} لاعب")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.warning("⚠️ الرجاء اختيار لاعبين أولاً")
+                    success, msg = db.add_user(new_username, new_password, "player")
+                    if success:
+                        st.success(msg)
+                        st.info("يمكنك الآن تسجيل الدخول باستخدام بياناتك")
+                        st.session_state.show_register = False
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            
+            if st.button("🔙 العودة لتسجيل الدخول", use_container_width=True):
+                st.session_state.show_register = False
+                st.rerun()
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+
+def coach_sidebar():
+    """الشريط الجانبي للكابتن مع معلومات وقائمة"""
+    with st.sidebar:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 10px;'>
+            <h2>👋 مرحباً كابتن</h2>
+            <h3>{st.session_state.username}</h3>
+        </div>
+        """, unsafe_allow_html=True)
         
         st.markdown("---")
         
-        # عرض حالة الحضور اليوم
-        st.subheader("حالة الحضور والغياب اليوم")
-        today_attendance = get_today_attendance()
-        if not today_attendance.empty:
-            # إضافة أسماء اللاعبين غير المسجلين
-            all_players_set = set(players)
-            recorded_players = set(today_attendance["player_name"].tolist())
-            missing_players = all_players_set - recorded_players
-            
-            # عرض الجدول
-            display_df = today_attendance[["player_name", "status"]].copy()
-            display_df.columns = ["اللاعب", "الحالة"]
-            st.dataframe(display_df, use_container_width=True)
-            
-            if missing_players:
-                st.info(f"📌 لم يتم تسجيل {len(missing_players)} لاعب بعد: {', '.join(missing_players)}")
-        else:
-            st.info("📌 لم يتم تسجيل أي حضور أو غياب اليوم")
+        menu_options = {
+            "📋 تسجيل الحضور": "attendance",
+            "💰 إدارة الاشتراكات": "subscriptions",
+            "💵 تسجيل المدفوعات": "payments",
+            "📊 الإحصائيات والتقارير": "statistics",
+            "👥 إدارة اللاعبين": "players",
+            "⚙️ الإعدادات": "settings"
+        }
         
-        # عرض إحصائيات الغياب
-        st.subheader("إحصائيات الغياب للاعبين")
-        absence_stats = []
-        for player in players:
-            absent_count = get_absence_count(player)
-            percentage = get_attendance_percentage(player)
-            absence_stats.append({
-                "اللاعب": player,
-                "عدد مرات الغياب": absent_count,
-                "نسبة الحضور": f"{percentage:.1f}%"
-            })
-        if absence_stats:
-            st.dataframe(pd.DataFrame(absence_stats), use_container_width=True)
+        selected = st.radio("القائمة الرئيسية", list(menu_options.keys()))
+        current_page = menu_options[selected]
+        
+        st.markdown("---")
+        
+        # معلومات سريعة
+        db = GoogleSheetsDB()
+        players_count = len(db.get_all_players())
+        st.metric("👥 عدد اللاعبين", players_count)
+        
+        # زر تسجيل الخروج
+        if st.button("🚪 تسجيل الخروج", type="secondary", use_container_width=True):
+            SessionManager.logout()
+            st.rerun()
+        
+        return current_page
 
-# ========== التبويب الثاني: الاشتراكات والدفعات ==========
-with tabs[1]:
-    st.subheader("إدارة الاشتراكات والمدفوعات")
+def player_sidebar():
+    """الشريط الجانبي للاعب"""
+    with st.sidebar:
+        st.markdown(f"""
+        <div style='text-align: center; padding: 10px;'>
+            <h2>👋 مرحباً</h2>
+            <h3>{st.session_state.username}</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        menu_options = {
+            "📊 لوحة المعلومات": "dashboard",
+            "📅 سجل الحضور": "attendance_history",
+            "💰 الاشتراك والمدفوعات": "financial",
+            "⚙️ إعدادات الحساب": "settings"
+        }
+        
+        selected = st.radio("القائمة", list(menu_options.keys()))
+        current_page = menu_options[selected]
+        
+        st.markdown("---")
+        
+        if st.button("🚪 تسجيل الخروج", type="secondary", use_container_width=True):
+            SessionManager.logout()
+            st.rerun()
+        
+        return current_page
+
+# ==================== صفحات الكابتن ====================
+
+def coach_attendance_page():
+    """صفحة تسجيل الحضور للكابتن"""
+    st.header("📋 تسجيل حضور وغياب اللاعبين")
     
-    players = get_all_players()
+    db = GoogleSheetsDB()
+    players = db.get_all_players()
+    
     if not players:
-        st.warning("⚠️ لا يوجد لاعبون مسجلون")
-    else:
-        selected_player = st.selectbox("اختر لاعباً", players, key="sub_select")
-        
-        if selected_player:
-            # عرض بيانات الاشتراك الحالية
-            current_sub = get_player_subscription(selected_player)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("#### 📝 بيانات الاشتراك")
-                with st.form("edit_subscription_form"):
-                    monthly_fee = st.number_input(
-                        "القيمة الشهرية (جنيه)",
-                        min_value=0.0,
-                        step=50.0,
-                        value=float(current_sub["monthly_fee"]) if current_sub else 200.0
-                    )
-                    start_date = st.date_input(
-                        "تاريخ البدء",
-                        value=datetime.strptime(current_sub["start_date"], "%Y-%m-%d").date() if current_sub and "start_date" in current_sub else date.today()
-                    )
-                    end_date = st.date_input(
-                        "تاريخ الانتهاء",
-                        value=datetime.strptime(current_sub["end_date"], "%Y-%m-%d").date() if current_sub and "end_date" in current_sub else date.today() + timedelta(days=30)
-                    )
-                    status_options = ["فعال", "منتهي", "ملغي"]
-                    current_status = current_sub["subscription_status"] if current_sub else "فعال"
-                    status_index = status_options.index(current_status) if current_status in status_options else 0
-                    status = st.selectbox("حالة الاشتراك", status_options, index=status_index)
-                    notes = st.text_area("ملاحظات", value=current_sub.get("notes", "") if current_sub else "")
-                    
-                    if st.form_submit_button("💾 تحديث الاشتراك", use_container_width=True):
-                        update_player_subscription(
-                            selected_player,
-                            monthly_fee,
-                            start_date.isoformat(),
-                            end_date.isoformat(),
-                            status,
-                            notes
-                        )
-                        st.success("✓ تم تحديث بيانات الاشتراك")
-                        st.rerun()
-            
-            with col2:
-                st.markdown("#### 💰 ملخص مالي")
-                total_paid = get_total_paid(selected_player)
-                total_due = calculate_total_due(selected_player)
-                remaining = calculate_remaining_amount(selected_player)
-                
-                st.metric("إجمالي المدفوع", f"{total_paid:.2f} جنيه")
-                st.metric("إجمالي المستحق", f"{total_due:.2f} جنيه")
-                st.metric("المتبقي", f"{remaining:.2f} جنيه", delta=f"-{total_paid:.2f}" if total_paid > 0 else None)
-            
-            st.markdown("---")
-            
-            # تسجيل دفعة جديدة
-            st.markdown("#### 💵 تسجيل دفعة جديدة")
-            with st.form("add_payment_form"):
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    amount = st.number_input("المبلغ (جنيه)", min_value=0.0, step=10.0, key="payment_amount")
-                    payment_method = st.selectbox(
-                        "طريقة الدفع",
-                        ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"],
-                        key="payment_method"
-                    )
-                with col_b:
-                    notes = st.text_area("ملاحظات (اختياري)", placeholder="رقم العملية، إيصال، ...")
-                
-                if st.form_submit_button("➕ إضافة دفعة", use_container_width=True):
-                    if amount > 0:
-                        add_payment(selected_player, amount, payment_method, notes)
-                        st.success(f"✓ تم تسجيل دفعة بقيمة {amount} جنيه للاعب {selected_player}")
-                        st.rerun()
-                    else:
-                        st.error("⚠️ الرجاء إدخال مبلغ صحيح")
-            
-            # عرض سجل الدفعات
-            st.markdown("#### 📜 سجل المدفوعات")
-            payments = get_player_payments(selected_player)
-            if not payments.empty:
-                display_payments = payments[["amount", "payment_method", "payment_date", "notes", "receipt_id"]].copy()
-                display_payments.columns = ["المبلغ", "طريقة الدفع", "تاريخ الدفع", "ملاحظات", "رقم الإيصال"]
-                st.dataframe(display_payments, use_container_width=True)
-            else:
-                st.info("لا توجد مدفوعات مسجلة لهذا اللاعب")
-
-# ========== التبويب الثالث: إدارة اللاعبين ==========
-with tabs[2]:
-    st.subheader("إدارة اللاعبين")
+        st.warning("لا يوجد لاعبون مسجلون بعد")
+        return
     
-    # إضافة لاعب جديد
-    st.markdown("#### ➕ إضافة لاعب جديد")
-    with st.form("add_player_form"):
-        col_a, col_b = st.columns(2)
-        with col_a:
-            new_username = st.text_input("الاسم الثلاثي", placeholder="مثال: عمر خالد محمود")
-            new_password = st.text_input("كلمة المرور", type="password", placeholder="كلمة مرور مؤقتة")
-        with col_b:
-            new_email = st.text_input("البريد الإلكتروني (اختياري)", placeholder="example@email.com")
-            new_phone = st.text_input("رقم الهاتف (اختياري)", placeholder="01234567890")
-        
-        if st.form_submit_button("إضافة لاعب", use_container_width=True):
-            if not new_username or not new_password:
-                st.error("⚠️ الرجاء إدخال الاسم الثلاثي وكلمة المرور")
-            else:
-                success, message = add_new_user(new_username, new_password, "player", new_email, new_phone)
-                if success:
-                    st.success(f"✓ {message}")
-                    st.rerun()
-                else:
-                    st.error(f"❌ {message}")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        att_date = st.date_input("📅 تاريخ الحضور", value=date.today())
+    
+    # جلب سجلات الحضور الحالية لهذا التاريخ
+    ws_att = db.get_attendance_sheet()
+    records = ws_att.get_all_records()
+    today_present = []
+    for r in records:
+        if r["date"] == str(att_date) and r["status"] == "Present":
+            today_present.append(r["player_name"])
     
     st.markdown("---")
+    st.subheader(f"تسجيل حضور يوم {att_date}")
     
-    # قائمة اللاعبين الحاليين
-    st.markdown("#### 📋 قائمة اللاعبين")
-    players_list = get_all_players()
-    if players_list:
-        # عرض مع معلومات الاشتراك
-        players_data = []
-        for p in players_list:
-            sub = get_player_subscription(p)
-            remaining = calculate_remaining_amount(p)
-            players_data.append({
-                "اسم اللاعب": p,
-                "الاشتراك الشهري": f"{sub['monthly_fee']} جنيه" if sub else "غير محدد",
-                "حالة الاشتراك": sub["subscription_status"] if sub else "غير محدد",
-                "المتبقي": f"{remaining:.2f} جنيه"
-            })
-        st.dataframe(pd.DataFrame(players_data), use_container_width=True)
+    # اختيار متعدد للحاضرين
+    selected_present = st.multiselect(
+        "✅ اختر اللاعبين الحاضرين (يمكنك اختيار أكثر من لاعب)",
+        options=players,
+        default=today_present,
+        help="اللاعبون الذين لم يتم اختيارهم سيتم تسجيلهم كغائبين"
+    )
+    
+    # عرض ملخص سريع
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("👥 إجمالي اللاعبين", len(players))
+    with col2:
+        st.metric("✅ الحاضرين", len(selected_present))
+    with col3:
+        st.metric("❌ الغائبين", len(players) - len(selected_present))
+    
+    # عرض أسماء الغائبين
+    absent_players = [p for p in players if p not in selected_present]
+    if absent_players:
+        with st.expander(f"📋 قائمة الغائبين ({len(absent_players)})"):
+            for p in absent_players:
+                st.write(f"- {p}")
+    
+    if st.button("💾 حفظ تسجيل الحضور", type="primary", use_container_width=True):
+        with st.spinner("جاري حفظ البيانات..."):
+            try:
+                db.record_attendance(str(att_date), selected_present, st.session_state.username)
+                st.success(f"✅ تم تسجيل الحضور لعدد {len(players)} لاعب بنجاح")
+                st.balloons()
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ حدث خطأ أثناء الحفظ: {str(e)}")
+    
+    # عرض سجل الحضور للأيام السابقة
+    st.markdown("---")
+    st.subheader("📜 سجل الحضور السابق")
+    
+    att_data = ws_att.get_all_records()
+    if att_data:
+        df = pd.DataFrame(att_data)
+        df = df.sort_values("date", ascending=False)
         
-        # خيار حذف لاعب (بحذر)
-        with st.expander("⚠️ حذف لاعب (عملية لا ترجع)"):
-            player_to_delete = st.selectbox("اختر لاعباً للحذف", players_list, key="delete_select")
-            if st.button("🗑️ حذف اللاعب", use_container_width=True):
-                st.warning("هذه العملية نهائية. هل أنت متأكد؟")
-                confirm = st.checkbox("نعم، أنا متأكد من حذف هذا اللاعب")
-                if confirm:
-                    # حذف من Users
-                    users_df = load_dataframe("Users")
-                    users_df = users_df[users_df["username"] != player_to_delete]
-                    save_dataframe("Users", users_df)
-                    # حذف من Attendance
-                    att_df = load_dataframe("Attendance")
-                    if not att_df.empty:
-                        att_df = att_df[att_df["player_name"] != player_to_delete]
-                        save_dataframe("Attendance", att_df)
-                    # حذف من Subscriptions
-                    subs_df = load_dataframe("Subscriptions")
-                    if not subs_df.empty:
-                        subs_df = subs_df[subs_df["player_name"] != player_to_delete]
-                        save_dataframe("Subscriptions", subs_df)
-                    # حذف من Payments
-                    pay_df = load_dataframe("Payments")
-                    if not pay_df.empty:
-                        pay_df = pay_df[pay_df["player_name"] != player_to_delete]
-                        save_dataframe("Payments", pay_df)
-                    st.success(f"✓ تم حذف اللاعب {player_to_delete}")
-                    st.rerun()
-    else:
-        st.info("لا يوجد لاعبون مسجلون حالياً")
+        # إمكانية تصفية حسب التاريخ
+        unique_dates = sorted(df["date"].unique(), reverse=True)
+        selected_date_view = st.selectbox("اختر تاريخ للعرض", unique_dates)
+        
+        filtered_df = df[df["date"] == selected_date_view]
+        present_count = len(filtered_df[filtered_df["status"] == "Present"])
+        absent_count = len(filtered_df[filtered_df["status"] == "Absent"])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("✅ الحاضرين", present_count)
+        with col2:
+            st.metric("❌ الغائبين", absent_count)
+        
+        st.dataframe(filtered_df[["player_name", "status", "recorded_by", "recorded_at"]], 
+                    use_container_width=True)
 
-# ========== التبويب الرابع: التقارير والإحصائيات ==========
-with tabs[3]:
-    st.subheader("التقارير والإحصائيات")
+def coach_subscriptions_page():
+    """صفحة إدارة الاشتراكات للكابتن"""
+    st.header("💰 إدارة اشتراكات اللاعبين")
     
-    report_tabs = st.tabs(["📈 إحصائيات الحضور", "💰 تقارير مالية", "📊 تحليلات متقدمة"])
+    db = GoogleSheetsDB()
+    players = db.get_all_players()
     
-    with report_tabs[0]:
-        # إحصائيات الحضور العامة
-        st.markdown("#### ملخص الحضور لجميع اللاعبين")
-        summary = get_attendance_summary()
-        if not summary.empty:
-            # رسم بياني
-            fig = px.bar(
-                summary,
-                x="player_name",
-                y="attendance_percentage",
-                title="نسبة الحضور لكل لاعب",
-                labels={"player_name": "اللاعب", "attendance_percentage": "نسبة الحضور (%)"},
-                color="attendance_percentage",
-                color_continuous_scale="Viridis"
-            )
-            fig.update_layout(showlegend=False)
+    if not players:
+        st.warning("لا يوجد لاعبون مسجلون بعد")
+        return
+    
+    tab1, tab2, tab3 = st.tabs(["➕ اشتراك جديد", "📋 الاشتراكات الحالية", "📊 ملخص الاشتراكات"])
+    
+    with tab1:
+        st.subheader("تسجيل اشتراك جديد")
+        with st.form("new_subscription_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                player = st.selectbox("👤 اللاعب", players)
+                monthly_fee = st.number_input("💵 الرسوم الشهرية (جنيه)", 
+                                            min_value=0.0, step=50.0, value=500.0)
+                start_date = st.date_input("📅 تاريخ البداية", value=date.today())
+            with col2:
+                end_date = st.date_input("📅 تاريخ النهاية", 
+                                       value=date.today() + timedelta(days=30))
+                status = st.selectbox("📌 الحالة", ["نشط", "منتهي", "متوقف"])
+                notes = st.text_area("📝 ملاحظات", placeholder="أي ملاحظات إضافية")
+            
+            if st.form_submit_button("💾 حفظ الاشتراك", type="primary"):
+                if monthly_fee <= 0:
+                    st.error("يجب أن تكون الرسوم الشهرية أكبر من صفر")
+                elif end_date <= start_date:
+                    st.error("تاريخ النهاية يجب أن يكون بعد تاريخ البداية")
+                else:
+                    try:
+                        db.add_subscription(player, monthly_fee, str(start_date), 
+                                          str(end_date), status, notes)
+                        st.success("✅ تم حفظ الاشتراك بنجاح")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ حدث خطأ: {str(e)}")
+    
+    with tab2:
+        st.subheader("الاشتراكات المسجلة")
+        ws_subs = db.get_subscriptions_sheet()
+        subs_data = ws_subs.get_all_records()
+        
+        if subs_data:
+            df = pd.DataFrame(subs_data)
+            
+            # تصفية حسب اللاعب
+            selected_player = st.selectbox("تصفية حسب اللاعب", ["الكل"] + players)
+            if selected_player != "الكل":
+                df = df[df["player_name"] == selected_player]
+            
+            # تصفية حسب الحالة
+            status_filter = st.multiselect("تصفية حسب الحالة", 
+                                         ["نشط", "منتهي", "متوقف"],
+                                         default=["نشط"])
+            if status_filter:
+                df = df[df["subscription_status"].isin(status_filter)]
+            
+            if not df.empty:
+                st.dataframe(df, use_container_width=True)
+                
+                # تعديل اشتراك
+                st.markdown("---")
+                st.subheader("✏️ تعديل اشتراك")
+                sub_index = st.selectbox("اختر الاشتراك للتعديل", 
+                                       df.index,
+                                       format_func=lambda x: f"{df.loc[x, 'player_name']} - {df.loc[x, 'start_date']}")
+                
+                if sub_index is not None:
+                    row = df.loc[sub_index]
+                    with st.form("edit_subscription_form"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            new_fee = st.number_input("الرسوم الشهرية", 
+                                                    value=float(row["monthly_fee"]))
+                            new_start = st.date_input("تاريخ البداية", 
+                                                    value=pd.to_datetime(row["start_date"]).date())
+                        with col2:
+                            new_end = st.date_input("تاريخ النهاية", 
+                                                  value=pd.to_datetime(row["end_date"]).date())
+                            new_status = st.selectbox("الحالة", 
+                                                    ["نشط", "منتهي", "متوقف"],
+                                                    index=["نشط", "منتهي", "متوقف"].index(row["subscription_status"]))
+                        new_notes = st.text_area("ملاحظات", value=row.get("notes", ""))
+                        
+                        if st.form_submit_button("تحديث الاشتراك"):
+                            updates = {
+                                "monthly_fee": new_fee,
+                                "end_date": str(new_end),
+                                "subscription_status": new_status,
+                                "notes": new_notes
+                            }
+                            try:
+                                db.update_subscription(sub_index, updates)
+                                st.success("تم تحديث الاشتراك بنجاح")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"فشل التحديث: {str(e)}")
+            else:
+                st.info("لا توجد اشتراكات تطابق معايير التصفية")
+        else:
+            st.info("لا توجد اشتراكات مسجلة بعد")
+    
+    with tab3:
+        st.subheader("ملخص الاشتراكات")
+        subs_data = ws_subs.get_all_records()
+        if subs_data:
+            df = pd.DataFrame(subs_data)
+            
+            # إحصائيات
+            active_subs = df[df["subscription_status"] == "نشط"]
+            total_monthly_income = active_subs["monthly_fee"].sum() if not active_subs.empty else 0
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📊 عدد الاشتراكات النشطة", len(active_subs))
+            with col2:
+                st.metric("💰 إجمالي الدخل الشهري المتوقع", f"{total_monthly_income:,.0f} ج.م")
+            with col3:
+                # عدد اللاعبين الذين ليس لديهم اشتراك نشط
+                players_with_active = active_subs["player_name"].unique().tolist()
+                players_without = [p for p in players if p not in players_with_active]
+                st.metric("⚠️ لاعبون بدون اشتراك نشط", len(players_without))
+            
+            # رسم بياني لتوزيع الاشتراكات
+            if not active_subs.empty:
+                fig = px.bar(active_subs, x="player_name", y="monthly_fee", 
+                           title="الرسوم الشهرية للاعبين",
+                           labels={"monthly_fee": "الرسوم (ج.م)", "player_name": "اللاعب"})
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("لا توجد بيانات")
+
+def coach_payments_page():
+    """صفحة تسجيل المدفوعات للكابتن"""
+    st.header("💵 تسجيل دفعات اللاعبين")
+    
+    db = GoogleSheetsDB()
+    players = db.get_all_players()
+    
+    if not players:
+        st.warning("لا يوجد لاعبون مسجلون بعد")
+        return
+    
+    tab1, tab2 = st.tabs(["➕ دفعة جديدة", "📜 سجل المدفوعات"])
+    
+    with tab1:
+        st.subheader("تسجيل دفعة جديدة")
+        with st.form("new_payment_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                player = st.selectbox("👤 اللاعب", players)
+                amount = st.number_input("💵 المبلغ", min_value=0.0, step=50.0)
+                payment_method = st.selectbox("💳 طريقة الدفع", 
+                                            ["Cash", "InstaPay", "Vodafone Cash", 
+                                             "Bank Transfer", "Other"])
+            with col2:
+                payment_date = st.date_input("📅 تاريخ الدفع", value=date.today())
+                notes = st.text_area("📝 ملاحظات", placeholder="أي ملاحظات إضافية")
+            
+            if st.form_submit_button("💾 تسجيل الدفعة", type="primary"):
+                if amount <= 0:
+                    st.error("المبلغ يجب أن يكون أكبر من صفر")
+                else:
+                    try:
+                        db.add_payment(player, amount, payment_method, str(payment_date),
+                                     notes, st.session_state.username)
+                        st.success("✅ تم تسجيل الدفعة بنجاح")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ حدث خطأ: {str(e)}")
+    
+    with tab2:
+        st.subheader("سجل المدفوعات")
+        payments_df = db.get_all_payments()
+        
+        if not payments_df.empty:
+            # تصفية
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                filter_player = st.selectbox("تصفية حسب اللاعب", ["الكل"] + players)
+            with col2:
+                if not payments_df.empty:
+                    methods = ["الكل"] + payments_df["payment_method"].unique().tolist()
+                    filter_method = st.selectbox("طريقة الدفع", methods)
+            with col3:
+                if not payments_df.empty:
+                    filter_date = st.date_input("من تاريخ", value=None)
+            
+            filtered_df = payments_df.copy()
+            if filter_player != "الكل":
+                filtered_df = filtered_df[filtered_df["player_name"] == filter_player]
+            if filter_method != "الكل":
+                filtered_df = filtered_df[filtered_df["payment_method"] == filter_method]
+            if filter_date:
+                filtered_df = filtered_df[pd.to_datetime(filtered_df["payment_date"]).dt.date >= filter_date]
+            
+            # عرض الإجمالي
+            total_amount = filtered_df["amount"].sum()
+            st.metric("💰 إجمالي المدفوعات المعروضة", f"{total_amount:,.0f} ج.م")
+            
+            st.dataframe(filtered_df.sort_values("payment_date", ascending=False), 
+                        use_container_width=True)
+            
+            # تعديل أو حذف دفعة
+            if not filtered_df.empty:
+                st.markdown("---")
+                st.subheader("✏️ تعديل أو حذف دفعة")
+                payment_idx = st.selectbox("اختر الدفعة", filtered_df.index,
+                                         format_func=lambda x: f"{filtered_df.loc[x, 'player_name']} - {filtered_df.loc[x, 'amount']} ج.م - {filtered_df.loc[x, 'payment_date']}")
+                
+                if payment_idx is not None:
+                    row = filtered_df.loc[payment_idx]
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🗑️ حذف الدفعة", type="secondary"):
+                            try:
+                                db.delete_payment(payment_idx)
+                                st.success("تم حذف الدفعة بنجاح")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"فشل الحذف: {str(e)}")
+                    
+                    with col2:
+                        with st.expander("تعديل الدفعة"):
+                            with st.form("edit_payment_form"):
+                                new_amount = st.number_input("المبلغ", value=float(row["amount"]))
+                                new_method = st.selectbox("طريقة الدفع",
+                                                        ["Cash", "InstaPay", "Vodafone Cash", 
+                                                         "Bank Transfer", "Other"],
+                                                        index=["Cash", "InstaPay", "Vodafone Cash", 
+                                                               "Bank Transfer", "Other"].index(row["payment_method"]))
+                                new_date = st.date_input("تاريخ الدفع", 
+                                                       value=pd.to_datetime(row["payment_date"]).date())
+                                new_notes = st.text_area("ملاحظات", value=row.get("notes", ""))
+                                
+                                if st.form_submit_button("تحديث الدفعة"):
+                                    updates = {
+                                        "amount": new_amount,
+                                        "payment_method": new_method,
+                                        "payment_date": str(new_date),
+                                        "notes": new_notes
+                                    }
+                                    try:
+                                        db.update_payment(payment_idx, updates)
+                                        st.success("تم تحديث الدفعة بنجاح")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"فشل التحديث: {str(e)}")
+        else:
+            st.info("لا توجد مدفوعات مسجلة بعد")
+
+def coach_statistics_page():
+    """صفحة الإحصائيات والتقارير للكابتن"""
+    st.header("📊 الإحصائيات والتقارير")
+    
+    db = GoogleSheetsDB()
+    players = db.get_all_players()
+    
+    if not players:
+        st.warning("لا يوجد لاعبون مسجلون بعد")
+        return
+    
+    tab1, tab2, tab3 = st.tabs(["📈 إحصائيات الحضور", "💰 التحليل المالي", "📋 تقارير شاملة"])
+    
+    with tab1:
+        st.subheader("إحصائيات الحضور والغياب")
+        
+        summary_df = db.get_attendance_summary()
+        if not summary_df.empty:
+            # ترتيب حسب نسبة الحضور
+            summary_df = summary_df.sort_values("Attendance %", ascending=False)
+            
+            # عرض جدول
+            st.dataframe(summary_df, use_container_width=True)
+            
+            # رسم بياني لنسب الحضور
+            fig = px.bar(summary_df, x="player_name", y="Attendance %",
+                        title="نسبة حضور اللاعبين",
+                        labels={"player_name": "اللاعب", "Attendance %": "نسبة الحضور %"},
+                        color="Attendance %",
+                        color_continuous_scale="RdYlGn")
+            fig.update_layout(yaxis_range=[0, 100])
             st.plotly_chart(fig, use_container_width=True)
             
-            # جدول
-            display_summary = summary[["player_name", "total_sessions", "present", "absent", "attendance_percentage"]].copy()
-            display_summary.columns = ["اللاعب", "عدد الجلسات", "حاضر", "غائب", "نسبة الحضور %"]
-            st.dataframe(display_summary, use_container_width=True)
-        else:
-            st.info("لا توجد بيانات حضور كافية لعرض الإحصائيات")
-        
-        # اتجاه الحضور الشهري
-        st.markdown("#### اتجاه الحضور الشهري")
-        monthly_trend = get_attendance_trend()
-        if not monthly_trend.empty:
-            fig2 = px.line(
-                monthly_trend,
-                x="month",
-                y="percentage",
-                title="نسبة الحضور الإجمالية شهرياً",
-                labels={"month": "الشهر", "percentage": "نسبة الحضور (%)"},
-                markers=True
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("لا توجد بيانات كافية لعرض الاتجاه الشهري")
-    
-    with report_tabs[1]:
-        # التقارير المالية
-        financial = get_financial_summary()
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            display_metric_card("إجمالي التحصيل", f"{financial['total_collected']:.0f} جنيه", "💰")
-        with col2:
-            display_metric_card("المتوقع تحصيله", f"{financial['total_expected']:.0f} جنيه", "📋")
-        with col3:
-            display_metric_card("المتأخرات", f"{financial['outstanding']:.0f} جنيه", "⚠️")
-        with col4:
-            display_metric_card("عدد الدفعات", f"{financial['num_payments']}", "📄")
-        
-        st.markdown("#### ملخص الاشتراكات")
-        subs_summary = get_subscription_status_summary()
-        if not subs_summary.empty:
-            st.dataframe(subs_summary, use_container_width=True)
-        
-        st.markdown("#### التحصيل الشهري")
-        monthly_collection = get_monthly_collection()
-        if not monthly_collection.empty:
-            fig3 = px.bar(
-                monthly_collection,
-                x="month",
-                y="amount",
-                title="التحصيل الشهري",
-                labels={"month": "الشهر", "amount": "المبلغ (جنيه)"},
-                color="amount",
-                color_continuous_scale="Blues"
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-        else:
-            st.info("لا توجد مدفوعات مسجلة")
-        
-        st.markdown("#### توزيع المدفوعات حسب طريقة الدفع")
-        payment_dist = get_payment_method_distribution()
-        if not payment_dist.empty:
-            fig4 = px.pie(
-                payment_dist,
-                values="amount",
-                names="payment_method",
-                title="توزيع المدفوعات حسب طريقة الدفع"
-            )
-            st.plotly_chart(fig4, use_container_width=True)
-        else:
-            st.info("لا توجد بيانات كافية")
-    
-    with report_tabs[2]:
-        st.markdown("#### تحليل أداء اللاعبين")
-        if not summary.empty:
-            top_players = get_top_attendance_players(5)
-            st.markdown("**🏆 أفضل 5 لاعبين من حيث الحضور**")
-            for i, row in top_players.iterrows():
-                st.write(f"{i+1}. {row['player_name']}: {row['attendance_percentage']:.1f}%")
+            # إحصائيات عامة
+            avg_attendance = summary_df["Attendance %"].mean()
+            best_player = summary_df.iloc[0]["player_name"] if not summary_df.empty else "لا يوجد"
+            worst_player = summary_df.iloc[-1]["player_name"] if not summary_df.empty else "لا يوجد"
             
-            bottom_players = get_bottom_attendance_players(5)
-            st.markdown("**⚠️ أسوأ 5 لاعبين من حيث الحضور**")
-            for i, row in bottom_players.iterrows():
-                st.write(f"{i+1}. {row['player_name']}: {row['attendance_percentage']:.1f}%")
-        else:
-            st.info("لا توجد بيانات كافية")
-        
-        st.markdown("#### إحصائيات متقدمة")
-        players = get_all_players()
-        if players:
-            avg_attendance = summary["attendance_percentage"].mean() if not summary.empty else 0
-            st.metric("متوسط نسبة الحضور لجميع اللاعبين", f"{avg_attendance:.1f}%")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📊 متوسط نسبة الحضور", f"{avg_attendance:.1f}%")
+            with col2:
+                st.metric("🏆 الأعلى حضوراً", best_player)
+            with col3:
+                st.metric("⚠️ الأقل حضوراً", worst_player)
             
-            total_absences = sum(get_absence_count(p) for p in players)
-            st.metric("إجمالي عدد مرات الغياب", total_absences)
+            # تفاصيل يومية
+            st.markdown("---")
+            st.subheader("تفاصيل الحضور اليومي")
+            ws_att = db.get_attendance_sheet()
+            att_data = ws_att.get_all_records()
+            if att_data:
+                daily_df = pd.DataFrame(att_data)
+                daily_summary = daily_df.groupby("date").agg({
+                    "status": lambda x: (x == "Present").sum()
+                }).rename(columns={"status": "عدد الحاضرين"})
+                daily_summary["إجمالي اللاعبين"] = len(players)
+                daily_summary["نسبة الحضور"] = (daily_summary["عدد الحاضرين"] / daily_summary["إجمالي اللاعبين"] * 100).round(1)
+                
+                st.dataframe(daily_summary.sort_index(ascending=False), use_container_width=True)
+                
+                # رسم بياني للحضور اليومي
+                fig2 = px.line(daily_summary.reset_index(), x="date", y="نسبة الحضور",
+                             title="تطور نسبة الحضور اليومية",
+                             markers=True)
+                fig2.update_layout(yaxis_range=[0, 100])
+                st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("لا توجد بيانات حضور بعد")
+    
+    with tab2:
+        st.subheader("التحليل المالي")
+        
+        # بيانات الاشتراكات
+        ws_subs = db.get_subscriptions_sheet()
+        subs_data = ws_subs.get_all_records()
+        if subs_data:
+            subs_df = pd.DataFrame(subs_data)
+            active_subs = subs_df[subs_df["subscription_status"] == "نشط"]
+            
+            # إجمالي الدخل الشهري
+            total_monthly = active_subs["monthly_fee"].sum() if not active_subs.empty else 0
+            
+            # بيانات المدفوعات
+            payments_df = db.get_all_payments()
+            if not payments_df.empty:
+                # إجمالي المدفوعات
+                total_paid = payments_df["amount"].sum()
+                
+                # المدفوعات الشهرية
+                payments_df["month"] = pd.to_datetime(payments_df["payment_date"]).dt.to_period("M")
+                monthly_payments = payments_df.groupby("month")["amount"].sum().reset_index()
+                monthly_payments["month"] = monthly_payments["month"].astype(str)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("💰 الدخل الشهري المتوقع", f"{total_monthly:,.0f} ج.م")
+                with col2:
+                    st.metric("💵 إجمالي المدفوعات المستلمة", f"{total_paid:,.0f} ج.م")
+                with col3:
+                    collection_rate = (total_paid / (total_monthly * max(1, len(monthly_payments)))) * 100 if total_monthly > 0 else 0
+                    st.metric("📊 نسبة التحصيل", f"{collection_rate:.1f}%")
+                
+                # رسم بياني للمدفوعات الشهرية
+                fig = px.bar(monthly_payments, x="month", y="amount",
+                           title="المدفوعات الشهرية",
+                           labels={"month": "الشهر", "amount": "المبلغ (ج.م)"})
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # توزيع طرق الدفع
+                method_counts = payments_df["payment_method"].value_counts()
+                fig2 = px.pie(values=method_counts.values, names=method_counts.index,
+                            title="توزيع طرق الدفع")
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("لا توجد مدفوعات مسجلة")
+        else:
+            st.info("لا توجد اشتراكات مسجلة")
+    
+    with tab3:
+        st.subheader("تقارير شاملة")
+        
+        # تقرير لكل لاعب
+        report_data = []
+        for player in players:
+            # الحضور
+            att_df = db.get_attendance_for_player(player)
+            total_att = len(att_df)
+            present = len(att_df[att_df["status"] == "Present"]) if not att_df.empty else 0
+            att_rate = (present / total_att * 100) if total_att > 0 else 0
+            
+            # الاشتراك النشط
+            active_sub = db.get_active_subscription(player)
+            monthly_fee = active_sub["monthly_fee"] if active_sub else 0
+            
+            # المدفوعات
+            pay_df = db.get_player_payments(player)
+            total_paid = pay_df["amount"].sum() if not pay_df.empty else 0
+            
+            report_data.append({
+                "اللاعب": player,
+                "نسبة الحضور": f"{att_rate:.1f}%",
+                "الاشتراك الشهري": monthly_fee,
+                "إجمالي المدفوع": total_paid,
+                "عدد مرات الغياب": total_att - present
+            })
+        
+        if report_data:
+            report_df = pd.DataFrame(report_data)
+            st.dataframe(report_df, use_container_width=True)
+            
+            # إمكانية تحميل التقرير كـ CSV
+            csv = report_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 تحميل التقرير كملف CSV",
+                data=csv,
+                file_name=f"تقرير_الكوتش_أكاديمي_{date.today()}.csv",
+                mime="text/csv"
+            )
 
-# ========== التبويب الخامس: إعدادات متقدمة ==========
-with tabs[4]:
-    st.subheader("الإعدادات المتقدمة")
+def coach_players_page():
+    """صفحة إدارة اللاعبين للكابتن"""
+    st.header("👥 إدارة اللاعبين")
     
-    st.markdown("#### نسخ احتياطي للبيانات")
+    db = GoogleSheetsDB()
+    ws_users = db.get_users_sheet()
+    users_data = ws_users.get_all_records()
+    
+    if users_data:
+        df = pd.DataFrame(users_data)
+        players_df = df[df["role"] == "player"]
+        
+        if not players_df.empty:
+            st.subheader("قائمة اللاعبين المسجلين")
+            st.dataframe(players_df[["username", "created_at"]], use_container_width=True)
+            
+            # إعادة تعيين كلمة مرور لاعب
+            st.markdown("---")
+            st.subheader("🔐 إعادة تعيين كلمة مرور لاعب")
+            selected_player = st.selectbox("اختر اللاعب", players_df["username"].tolist())
+            new_password = st.text_input("كلمة المرور الجديدة", type="password")
+            
+            if st.button("تحديث كلمة المرور"):
+                if len(new_password) < 4:
+                    st.error("كلمة المرور يجب أن تكون 4 أحرف على الأقل")
+                else:
+                    if db.update_user_password(selected_player, new_password):
+                        st.success(f"تم تحديث كلمة مرور اللاعب {selected_player} بنجاح")
+                    else:
+                        st.error("فشل تحديث كلمة المرور")
+        else:
+            st.info("لا يوجد لاعبون مسجلون بعد")
+    else:
+        st.info("لا توجد بيانات مستخدمين")
+
+def coach_settings_page():
+    """صفحة الإعدادات للكابتن"""
+    st.header("⚙️ الإعدادات")
+    
+    st.subheader("تغيير كلمة المرور")
+    with st.form("change_password_form"):
+        current_password = st.text_input("كلمة المرور الحالية", type="password")
+        new_password = st.text_input("كلمة المرور الجديدة", type="password")
+        confirm_password = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
+        
+        if st.form_submit_button("تحديث كلمة المرور"):
+            if new_password != confirm_password:
+                st.error("كلمة المرور الجديدة غير متطابقة")
+            elif len(new_password) < 4:
+                st.error("كلمة المرور يجب أن تكون 4 أحرف على الأقل")
+            else:
+                db = GoogleSheetsDB()
+                user = db.authenticate_user(st.session_state.username, current_password)
+                if user:
+                    if db.update_user_password(st.session_state.username, new_password):
+                        st.success("تم تحديث كلمة المرور بنجاح")
+                    else:
+                        st.error("فشل تحديث كلمة المرور")
+                else:
+                    st.error("كلمة المرور الحالية غير صحيحة")
+    
+    st.markdown("---")
+    st.subheader("معلومات النظام")
+    st.markdown(f"""
+    - **الإصدار:** 1.0.0
+    - **تاريخ آخر تحديث:** {date.today()}
+    - **مطور التطبيق:** الكوتش أكاديمي
+    """)
+
+# ==================== صفحات اللاعب ====================
+
+def player_dashboard_page():
+    """لوحة معلومات اللاعب"""
+    st.header("📊 لوحة المعلومات")
+    
+    db = GoogleSheetsDB()
+    player_name = st.session_state.username
+    
     col1, col2 = st.columns(2)
+    
     with col1:
-        if st.button("📥 تصدير البيانات إلى CSV", use_container_width=True):
-            # تصدير جميع البيانات
-            users_df = load_dataframe("Users")
-            att_df = load_dataframe("Attendance")
-            subs_df = load_dataframe("Subscriptions")
-            payments_df = load_dataframe("Payments")
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.subheader("📅 ملخص الحضور")
+        att_df = db.get_attendance_for_player(player_name)
+        if not att_df.empty:
+            total_days = len(att_df)
+            present_days = len(att_df[att_df["status"] == "Present"])
+            absent_days = total_days - present_days
+            attendance_rate = (present_days / total_days * 100) if total_days > 0 else 0
             
-            # تحويل إلى CSV
-            csv_users = users_df.to_csv(index=False).encode('utf-8')
-            csv_att = att_df.to_csv(index=False).encode('utf-8')
-            csv_subs = subs_df.to_csv(index=False).encode('utf-8')
-            csv_payments = payments_df.to_csv(index=False).encode('utf-8')
+            st.metric("إجمالي الأيام", total_days)
+            st.metric("أيام الحضور", present_days)
+            st.metric("أيام الغياب", absent_days)
+            st.metric("نسبة الحضور", f"{attendance_rate:.1f}%")
             
-            st.download_button("تحميل بيانات المستخدمين", csv_users, "users.csv", "text/csv")
-            st.download_button("تحميل بيانات الحضور", csv_att, "attendance.csv", "text/csv")
-            st.download_button("تحميل بيانات الاشتراكات", csv_subs, "subscriptions.csv", "text/csv")
-            st.download_button("تحميل بيانات المدفوعات", csv_payments, "payments.csv", "text/csv")
+            # رسم بياني دائري
+            fig = go.Figure(data=[go.Pie(labels=["حاضر", "غائب"], values=[present_days, absent_days],
+                                        hole=.3, marker_colors=["#2e7d32", "#d32f2f"])])
+            fig.update_layout(height=300)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("لا توجد بيانات حضور بعد")
+        st.markdown("</div>", unsafe_allow_html=True)
     
     with col2:
-        st.markdown("#### إعادة تعيين البيانات (استخدام بحذر)")
-        if st.button("⚠️ مسح جميع البيانات", use_container_width=True):
-            st.error("هذه العملية ستحذف جميع البيانات. هل أنت متأكد؟")
-            confirm = st.checkbox("نعم، أنا متأكد من مسح جميع البيانات")
-            if confirm:
-                # مسح البيانات
-                save_dataframe("Users", pd.DataFrame())
-                save_dataframe("Attendance", pd.DataFrame())
-                save_dataframe("Subscriptions", pd.DataFrame())
-                save_dataframe("Payments", pd.DataFrame())
-                st.success("✓ تم مسح جميع البيانات")
-                st.rerun()
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.subheader("💰 ملخص الاشتراك")
+        
+        active_sub = db.get_active_subscription(player_name)
+        if active_sub:
+            st.markdown(f"""
+            - **الرسوم الشهرية:** {active_sub['monthly_fee']} ج.م
+            - **تاريخ البداية:** {active_sub['start_date']}
+            - **تاريخ النهاية:** {active_sub['end_date']}
+            - **الحالة:** {active_sub['subscription_status']}
+            """)
+            
+            # حساب المدفوع والمتبقي
+            pay_df = db.get_player_payments(player_name)
+            total_paid = pay_df["amount"].sum() if not pay_df.empty else 0
+            
+            # حساب المبلغ المستحق (تقريبي)
+            start = pd.to_datetime(active_sub['start_date'])
+            end = pd.to_datetime(active_sub['end_date'])
+            months = ((end.year - start.year) * 12 + end.month - start.month) + 1
+            total_due = active_sub['monthly_fee'] * months
+            remaining = total_due - total_paid
+            
+            st.metric("إجمالي المدفوع", f"{total_paid:,.0f} ج.م")
+            st.metric("المبلغ المستحق", f"{total_due:,.0f} ج.م")
+            st.metric("المتبقي", f"{remaining:,.0f} ج.م", delta_color="inverse")
+            
+            # شريط تقدم
+            progress = min(total_paid / total_due, 1.0) if total_due > 0 else 0
+            st.progress(progress, text=f"نسبة السداد: {progress*100:.1f}%")
+        else:
+            st.warning("لا يوجد اشتراك نشط حالياً")
+        st.markdown("</div>", unsafe_allow_html=True)
     
-    st.markdown("#### معلومات النظام")
-    st.json({
-        "إصدار التطبيق": "2.0.0",
-        "عدد اللاعبين": len(get_all_players()),
-        "آخر تحديث": datetime.now().isoformat(),
-        "حالة الاتصال بـ Google Sheets": "متصل" if get_google_sheets_client() else "غير متصل"
-    })
-
-# ============================================================
-# SECTION 13: صفحة اللاعب (Player Dashboard)
-# ============================================================
-
-def player_dashboard():
-"""
-عرض لوحة معلومات اللاعب مع جميع التفاصيل الخاصة به.
-"""
-player_name = st.session_state["username"]
-display_header(f"مرحباً {player_name}", "لوحة معلومات اللاعب")
-
-show_sidebar_user_info()
-logout_button()
-
-# إحصائيات سريعة في الشريط الجانبي
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📈 إحصائياتي")
-percentage = get_attendance_percentage(player_name)
-st.sidebar.metric("نسبة الحضور", f"{percentage:.1f}%")
-
-total_paid = get_total_paid(player_name)
-remaining = calculate_remaining_amount(player_name)
-st.sidebar.metric("إجمالي المدفوع", f"{total_paid:.2f} جنيه")
-st.sidebar.metric("المتبقي", f"{remaining:.2f} جنيه")
-
-# البطاقات الرئيسية
-col1, col2, col3 = st.columns(3)
-with col1:
-    display_metric_card("نسبة الحضور", f"{percentage:.1f}%", "📊")
-with col2:
-    display_metric_card("إجمالي المدفوع", f"{total_paid:.2f} جنيه", "💰")
-with col3:
-    display_metric_card("المتبقي", f"{remaining:.2f} جنيه", "📌")
-
-# معلومات الاشتراك الحالي
-st.markdown("## 📝 اشتراكي الحالي")
-sub = get_player_subscription(player_name)
-if sub:
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        st.metric("القيمة الشهرية", f"{sub['monthly_fee']} جنيه")
-    with col_b:
-        st.metric("تاريخ البدء", sub['start_date'])
-    with col_c:
-        st.metric("تاريخ الانتهاء", sub['end_date'])
+    # آخر الأنشطة
+    st.markdown("---")
+    st.subheader("📋 آخر الأنشطة")
     
-    status_color = "green" if sub['subscription_status'] == "فعال" else "red"
-    st.markdown(f"**الحالة:** <span style='color:{status_color}'>{sub['subscription_status']}</span>", unsafe_allow_html=True)
-    if sub.get('notes'):
-        st.info(f"📝 ملاحظات: {sub['notes']}")
-else:
-    st.warning("لا يوجد اشتراك مسجل لك. الرجاء التواصل مع الكابتن.")
-
-# سجل الحضور
-st.markdown("## 📋 سجل الحضور والغياب")
-attendance_history = get_player_attendance_history(player_name)
-if not attendance_history.empty:
-    # إضافة رسم بياني للحضور
-    attendance_history["month"] = attendance_history["date"].dt.strftime("%Y-%m")
-    monthly_counts = attendance_history.groupby(["month", "status"]).size().unstack(fill_value=0)
-    if "Present" in monthly_counts.columns and "Absent" in monthly_counts.columns:
-        fig = go.Figure(data=[
-            go.Bar(name="حاضر", x=monthly_counts.index, y=monthly_counts["Present"], marker_color="green"),
-            go.Bar(name="غائب", x=monthly_counts.index, y=monthly_counts["Absent"], marker_color="red")
-        ])
-        fig.update_layout(barmode="group", title="الحضور والغياب شهرياً", xaxis_title="الشهر", yaxis_title="عدد المرات")
-        st.plotly_chart(fig, use_container_width=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**آخر 5 أيام حضور**")
+        att_df = db.get_attendance_for_player(player_name)
+        if not att_df.empty:
+            recent_att = att_df.head(5)
+            st.dataframe(recent_att[["date", "status"]], use_container_width=True)
+        else:
+            st.info("لا توجد بيانات")
     
-    # عرض الجدول
-    display_att = attendance_history[["date", "status"]].copy()
-    display_att["date"] = display_att["date"].dt.strftime("%Y-%m-%d")
-    display_att.columns = ["التاريخ", "الحالة"]
-    st.dataframe(display_att, use_container_width=True)
-else:
-    st.info("لا توجد سجلات حضور لك بعد")
+    with col2:
+        st.markdown("**آخر 5 مدفوعات**")
+        pay_df = db.get_player_payments(player_name)
+        if not pay_df.empty:
+            recent_pay = pay_df.head(5)
+            st.dataframe(recent_pay[["amount", "payment_date", "payment_method"]], 
+                        use_container_width=True)
+        else:
+            st.info("لا توجد مدفوعات")
 
-# سجل المدفوعات
-st.markdown("## 💳 سجل مدفوعاتي")
-payments = get_player_payments(player_name)
-if not payments.empty:
-    display_pay = payments[["amount", "payment_method", "payment_date", "notes", "receipt_id"]].copy()
-    display_pay.columns = ["المبلغ", "طريقة الدفع", "تاريخ الدفع", "ملاحظات", "رقم الإيصال"]
-    st.dataframe(display_pay, use_container_width=True)
-else:
-    st.info("لا توجد مدفوعات مسجلة لك بعد")
+def player_attendance_history_page():
+    """سجل حضور اللاعب"""
+    st.header("📅 سجل الحضور والغياب")
+    
+    db = GoogleSheetsDB()
+    att_df = db.get_attendance_for_player(st.session_state.username)
+    
+    if not att_df.empty:
+        # تصفية حسب النطاق الزمني
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("من تاريخ", 
+                                      value=pd.to_datetime(att_df["date"].min()).date())
+        with col2:
+            end_date = st.date_input("إلى تاريخ", 
+                                    value=date.today())
+        
+        # تحويل التواريخ للمقارنة
+        att_df["date_parsed"] = pd.to_datetime(att_df["date"]).dt.date
+        filtered = att_df[(att_df["date_parsed"] >= start_date) & 
+                         (att_df["date_parsed"] <= end_date)]
+        
+        if not filtered.empty:
+            st.dataframe(filtered[["date", "status", "recorded_at"]].sort_values("date", ascending=False),
+                        use_container_width=True)
+            
+            # إحصائيات للفترة المحددة
+            total = len(filtered)
+            present = len(filtered[filtered["status"] == "Present"])
+            absent = total - present
+            rate = (present / total * 100) if total > 0 else 0
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("إجمالي الأيام", total)
+            col2.metric("حاضر", present)
+            col3.metric("غائب", absent)
+            col4.metric("نسبة الحضور", f"{rate:.1f}%")
+            
+            # رسم بياني تطور الحضور
+            daily = filtered.groupby("date").agg({"status": lambda x: (x == "Present").sum()}).reset_index()
+            daily.columns = ["date", "present"]
+            daily["rate"] = (daily["present"] / 1 * 100)  # لأن كل يوم له سجل واحد للاعب
+            
+            fig = px.line(daily, x="date", y="rate", title="نسبة حضورك خلال الفترة",
+                        labels={"date": "التاريخ", "rate": "الحضور (نعم/لا)"})
+            fig.update_yaxes(tickvals=[0, 100], ticktext=["غائب", "حاضر"])
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("لا توجد بيانات في الفترة المحددة")
+    else:
+        st.info("لا توجد بيانات حضور حتى الآن")
 
-# ============================================================
-# SECTION 14: التطبيق الرئيسي (Main)
-# ============================================================
+def player_financial_page():
+    """صفحة الاشتراك والمدفوعات للاعب"""
+    st.header("💰 الاشتراك والمدفوعات")
+    
+    db = GoogleSheetsDB()
+    player_name = st.session_state.username
+    
+    tab1, tab2 = st.tabs(["📋 الاشتراكات", "💵 سجل المدفوعات"])
+    
+    with tab1:
+        st.subheader("الاشتراكات المسجلة")
+        subs_df = db.get_player_subscriptions(player_name)
+        if not subs_df.empty:
+            st.dataframe(subs_df, use_container_width=True)
+            
+            # الاشتراك النشط
+            active = subs_df[subs_df["subscription_status"] == "نشط"]
+            if not active.empty:
+                st.success("✅ لديك اشتراك نشط حالياً")
+            else:
+                st.warning("⚠️ لا يوجد اشتراك نشط حالياً")
+        else:
+            st.info("لا توجد اشتراكات مسجلة")
+    
+    with tab2:
+        st.subheader("سجل المدفوعات")
+        pay_df = db.get_player_payments(player_name)
+        if not pay_df.empty:
+            total_paid = pay_df["amount"].sum()
+            st.metric("💵 إجمالي المدفوعات", f"{total_paid:,.0f} ج.م")
+            
+            # جدول المدفوعات
+            st.dataframe(pay_df[["amount", "payment_method", "payment_date", "notes"]].sort_values("payment_date", ascending=False),
+                        use_container_width=True)
+            
+            # رسم بياني للمدفوعات عبر الزمن
+            pay_df["payment_date"] = pd.to_datetime(pay_df["payment_date"])
+            pay_df["month"] = pay_df["payment_date"].dt.to_period("M").astype(str)
+            monthly = pay_df.groupby("month")["amount"].sum().reset_index()
+            
+            fig = px.bar(monthly, x="month", y="amount", title="مدفوعاتك الشهرية",
+                       labels={"month": "الشهر", "amount": "المبلغ (ج.م)"})
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("لا توجد مدفوعات مسجلة")
+
+def player_settings_page():
+    """إعدادات حساب اللاعب"""
+    st.header("⚙️ إعدادات الحساب")
+    
+    st.subheader("تغيير كلمة المرور")
+    with st.form("player_change_password"):
+        current = st.text_input("كلمة المرور الحالية", type="password")
+        new_pass = st.text_input("كلمة المرور الجديدة", type="password")
+        confirm = st.text_input("تأكيد كلمة المرور الجديدة", type="password")
+        
+        if st.form_submit_button("تحديث كلمة المرور"):
+            if new_pass != confirm:
+                st.error("كلمة المرور الجديدة غير متطابقة")
+            elif len(new_pass) < 4:
+                st.error("كلمة المرور يجب أن تكون 4 أحرف على الأقل")
+            else:
+                db = GoogleSheetsDB()
+                user = db.authenticate_user(st.session_state.username, current)
+                if user:
+                    if db.update_user_password(st.session_state.username, new_pass):
+                        st.success("تم تحديث كلمة المرور بنجاح")
+                    else:
+                        st.error("فشل التحديث")
+                else:
+                    st.error("كلمة المرور الحالية غير صحيحة")
+
+# ==================== التطبيق الرئيسي ====================
 
 def main():
-"""
-الدالة الرئيسية لتشغيل التطبيق وإدارة الجلسات.
-"""
-# تهيئة حالة الجلسة إذا لزم الأمر
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-
-# عرض الصفحة المناسبة
-if not st.session_state["logged_in"]:
-    login_page()
-else:
-    if st.session_state["role"] == "coach":
-        coach_dashboard()
-    elif st.session_state["role"] == "player":
-        player_dashboard()
+    """الدالة الرئيسية للتطبيق"""
+    # تحميل الأنماط
+    load_css()
+    
+    # تهيئة الجلسة
+    SessionManager.init_session()
+    
+    # التحقق من حالة تسجيل الدخول
+    if not st.session_state.logged_in:
+        if st.session_state.show_register:
+            register_page()
+        else:
+            login_page()
     else:
-        st.error("⚠️ دور غير معروف")
-        if st.button("تسجيل خروج"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
+        # التحقق من صلاحية الجلسة
+        SessionManager.check_auth()
+        
+        # عرض الشريط الجانبي المناسب وتحديد الصفحة
+        if st.session_state.role == "coach":
+            current_page = coach_sidebar()
+            
+            # توجيه للصفحة المطلوبة
+            if current_page == "attendance":
+                coach_attendance_page()
+            elif current_page == "subscriptions":
+                coach_subscriptions_page()
+            elif current_page == "payments":
+                coach_payments_page()
+            elif current_page == "statistics":
+                coach_statistics_page()
+            elif current_page == "players":
+                coach_players_page()
+            elif current_page == "settings":
+                coach_settings_page()
+        else:
+            current_page = player_sidebar()
+            
+            if current_page == "dashboard":
+                player_dashboard_page()
+            elif current_page == "attendance_history":
+                player_attendance_history_page()
+            elif current_page == "financial":
+                player_financial_page()
+            elif current_page == "settings":
+                player_settings_page()
 
-# ============================================================
-# تشغيل التطبيق
-# ============================================================
 if __name__ == "__main__":
-main()
+    main()
