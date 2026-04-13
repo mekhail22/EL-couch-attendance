@@ -4,7 +4,9 @@
 باستخدام Streamlit و Google Sheets
 - دمج الاشتراكات والمدفوعات في نموذج واحد
 - رسوم الاشتراك الافتراضية 1500 جنيه
-- عرض شعار الأكاديمية من ملف logo.jpg
+- تسجيل الغياب باختيار الغائبين فقط (الحضور تلقائي)
+- إظهار اللاعبين غير المسددين بالكامل
+- إخفاء معظم الرسوم البيانية
 """
 
 import streamlit as st
@@ -282,21 +284,25 @@ class GoogleSheetsDB:
                 return True
         return False
     
-    # ========== الحضور ==========
+    # ========== الحضور (تسجيل الغائبين فقط) ==========
     def get_attendance_sheet(self) -> gspread.Worksheet:
         return self.get_or_create_worksheet("Attendance", 
             ["player_name", "date", "status", "recorded_by", "recorded_at"])
     
-    def record_attendance(self, date_str: str, present_players: List[str], coach_name: str) -> bool:
+    def record_attendance(self, date_str: str, absent_players: List[str], coach_name: str) -> bool:
+        """تسجيل الحضور والغياب: المعطى هم الغائبون فقط، والباقي حضور"""
         ws = self.get_attendance_sheet()
         all_players = self.get_all_players()
+        
+        # حذف السجلات القديمة لنفس التاريخ
         records = ws.get_all_records()
         rows_to_delete = [i for i, r in enumerate(records, start=2) if r["date"] == date_str]
         for row in sorted(rows_to_delete, reverse=True):
             ws.delete_rows(row)
+        
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for player in all_players:
-            status = "Present" if player in present_players else "Absent"
+            status = "Absent" if player in absent_players else "Present"
             ws.append_row([player, date_str, status, coach_name, timestamp])
         return True
     
@@ -324,7 +330,6 @@ class GoogleSheetsDB:
     
     # ========== الاشتراكات والمدفوعات (موحد) ==========
     def get_memberships_sheet(self) -> gspread.Worksheet:
-        """ورقة موحدة للاشتراكات والمدفوعات"""
         return self.get_or_create_worksheet("Memberships",
             ["player_name", "monthly_fee", "start_date", "end_date", 
              "notes", "amount_paid", "payment_method", "payment_date",
@@ -378,6 +383,38 @@ class GoogleSheetsDB:
         ws = self.get_memberships_sheet()
         ws.delete_rows(row_index + 2)
         return True
+    
+    # ========== تحليل المدفوعات ==========
+    def get_players_payment_status(self) -> pd.DataFrame:
+        """إرجاع DataFrame بحالة الدفع لكل لاعب (المدفوع، المستحق، المتبقي)"""
+        players = self.get_all_players()
+        memberships_df = self.get_all_memberships()
+        if memberships_df.empty:
+            return pd.DataFrame(columns=["اللاعب", "إجمالي المستحق", "إجمالي المدفوع", "المتبقي", "الحالة"])
+        
+        # تجميع المبالغ لكل لاعب
+        summary = memberships_df.groupby("player_name").agg({
+            "monthly_fee": "sum",
+            "amount_paid": "sum"
+        }).reset_index()
+        summary.columns = ["اللاعب", "إجمالي المستحق", "إجمالي المدفوع"]
+        summary["المتبقي"] = summary["إجمالي المستحق"] - summary["إجمالي المدفوع"]
+        summary["الحالة"] = summary["المتبقي"].apply(lambda x: "✅ مسدد" if x <= 0 else "❌ غير مسدد")
+        
+        # إضافة اللاعبين الذين ليس لديهم أي سجلات
+        players_with_records = summary["اللاعب"].tolist()
+        for p in players:
+            if p not in players_with_records:
+                new_row = pd.DataFrame([{
+                    "اللاعب": p,
+                    "إجمالي المستحق": 0,
+                    "إجمالي المدفوع": 0,
+                    "المتبقي": 0,
+                    "الحالة": "⚠️ لا يوجد اشتراك"
+                }])
+                summary = pd.concat([summary, new_row], ignore_index=True)
+        
+        return summary.sort_values("المتبقي", ascending=False)
     
     @staticmethod
     def _validate_three_part_name(name: str) -> bool:
@@ -493,7 +530,7 @@ def coach_sidebar():
         st.markdown(f"<h3>👋 مرحباً كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
         st.markdown("---")
         menu = {
-            "📋 تسجيل الحضور": "attendance",
+            "📋 تسجيل الغياب": "attendance",
             "💰 الاشتراكات والمدفوعات": "memberships",
             "📊 الإحصائيات والتقارير": "statistics",
             "👥 إدارة اللاعبين": "players",
@@ -528,38 +565,57 @@ def player_sidebar():
             st.rerun()
         return current_page
 
-# ==================== صفحات الكابتن (التفاصيل الكاملة) ====================
+# ==================== صفحات الكابتن ====================
+
 def coach_attendance_page():
-    st.header("📋 تسجيل حضور وغياب اللاعبين")
+    st.header("📋 تسجيل الغياب (الحضور تلقائي)")
     db = GoogleSheetsDB()
     players = db.get_all_players()
     if not players:
         st.warning("لا يوجد لاعبون مسجلون بعد")
         return
+    
     col1, col2 = st.columns([1, 2])
     with col1:
         att_date = st.date_input("📅 تاريخ الحضور", value=date.today())
+    
+    # جلب الغائبين الحاليين لهذا التاريخ
     ws_att = db.get_attendance_sheet()
     records = ws_att.get_all_records()
-    today_present = [r["player_name"] for r in records if r["date"] == str(att_date) and r["status"] == "Present"]
-    st.subheader(f"تسجيل حضور يوم {att_date}")
-    selected_present = st.multiselect("✅ اختر اللاعبين الحاضرين", players, default=today_present)
-    absent_players = [p for p in players if p not in selected_present]
+    today_absent = [r["player_name"] for r in records if r["date"] == str(att_date) and r["status"] == "Absent"]
+    
+    st.markdown("---")
+    st.subheader(f"تسجيل الغائبين ليوم {att_date}")
+    st.info("👈 اختر اللاعبين **الغائبين** فقط. باقي اللاعبين سيتم اعتبارهم حاضرين تلقائياً.")
+    
+    # اختيار متعدد للغائبين
+    selected_absent = st.multiselect(
+        "❌ اختر اللاعبين الغائبين",
+        options=players,
+        default=today_absent,
+        help="اللاعبون المختارون هم الغائبون، وغير المختارين حضور"
+    )
+    
+    present_players = [p for p in players if p not in selected_absent]
+    
     col1, col2, col3 = st.columns(3)
     col1.metric("👥 إجمالي اللاعبين", len(players))
-    col2.metric("✅ الحاضرين", len(selected_present))
-    col3.metric("❌ الغائبين", len(absent_players))
-    if absent_players:
-        with st.expander(f"📋 قائمة الغائبين ({len(absent_players)})"):
-            for p in absent_players:
+    col2.metric("✅ الحاضرين", len(present_players))
+    col3.metric("❌ الغائبين", len(selected_absent))
+    
+    if selected_absent:
+        with st.expander(f"📋 قائمة الغائبين ({len(selected_absent)})"):
+            for p in selected_absent:
                 st.write(f"- {p}")
-    if st.button("💾 حفظ تسجيل الحضور", type="primary", use_container_width=True):
+    
+    if st.button("💾 حفظ تسجيل الغياب", type="primary", use_container_width=True):
         with st.spinner("جاري حفظ البيانات..."):
-            db.record_attendance(str(att_date), selected_present, st.session_state.username)
-            st.success(f"✅ تم تسجيل الحضور لعدد {len(players)} لاعب بنجاح")
+            db.record_attendance(str(att_date), selected_absent, st.session_state.username)
+            st.success(f"✅ تم تسجيل الغياب لعدد {len(players)} لاعب بنجاح")
             st.balloons()
             time.sleep(1)
             st.rerun()
+    
     st.markdown("---")
     st.subheader("📜 سجل الحضور السابق")
     att_data = ws_att.get_all_records()
@@ -577,7 +633,9 @@ def coach_memberships_page():
     if not players:
         st.warning("لا يوجد لاعبون مسجلون بعد")
         return
-    tab1, tab2 = st.tabs(["➕ إضافة اشتراك / دفعة جديدة", "📋 سجل الاشتراكات والمدفوعات"])
+    
+    tab1, tab2, tab3 = st.tabs(["➕ إضافة اشتراك / دفعة", "📋 سجل الاشتراكات", "💳 حالة الدفع"])
+    
     with tab1:
         st.subheader("تسجيل اشتراك مع دفعة")
         with st.form("new_membership_form"):
@@ -595,6 +653,7 @@ def coach_memberships_page():
                 payment_method = st.selectbox("💳 طريقة الدفع", 
                                             ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"])
                 payment_date = st.date_input("📅 تاريخ الدفع", value=date.today())
+            
             if st.form_submit_button("💾 حفظ", type="primary"):
                 if monthly_fee <= 0:
                     st.error("يجب أن تكون رسوم الاشتراك أكبر من صفر")
@@ -607,28 +666,33 @@ def coach_memberships_page():
                     st.success("✅ تم حفظ بيانات الاشتراك والدفع بنجاح")
                     time.sleep(1)
                     st.rerun()
+    
     with tab2:
         st.subheader("سجل الاشتراكات والمدفوعات")
         df = db.get_all_memberships()
         if not df.empty:
             col1, col2 = st.columns(2)
             with col1:
-                filter_player = st.selectbox("تصفية حسب اللاعب", ["الكل"] + players)
+                filter_player = st.selectbox("تصفية حسب اللاعب", ["الكل"] + players, key="filter_player_tab2")
             with col2:
                 methods = ["الكل"] + df["payment_method"].unique().tolist()
-                filter_method = st.selectbox("طريقة الدفع", methods)
+                filter_method = st.selectbox("طريقة الدفع", methods, key="filter_method_tab2")
+            
             filtered_df = df.copy()
             if filter_player != "الكل":
                 filtered_df = filtered_df[filtered_df["player_name"] == filter_player]
             if filter_method != "الكل":
                 filtered_df = filtered_df[filtered_df["payment_method"] == filter_method]
+            
             total_fees = filtered_df["monthly_fee"].sum()
             total_paid = filtered_df["amount_paid"].sum()
             col1, col2, col3 = st.columns(3)
             col1.metric("📊 عدد السجلات", len(filtered_df))
             col2.metric("💰 إجمالي رسوم الاشتراكات", f"{total_fees:,.0f} ج.م")
             col3.metric("💵 إجمالي المدفوعات", f"{total_paid:,.0f} ج.م")
+            
             st.dataframe(filtered_df.sort_values("start_date", ascending=False), use_container_width=True)
+            
             if not filtered_df.empty:
                 st.markdown("---")
                 st.subheader("✏️ تعديل أو حذف سجل")
@@ -667,6 +731,34 @@ def coach_memberships_page():
                                     st.rerun()
         else:
             st.info("لا توجد سجلات بعد")
+    
+    with tab3:
+        st.subheader("💳 حالة دفع اللاعبين")
+        payment_status_df = db.get_players_payment_status()
+        if not payment_status_df.empty:
+            st.dataframe(payment_status_df, use_container_width=True)
+            
+            # عرض ملخص
+            total_players = len(payment_status_df)
+            unpaid_players = payment_status_df[payment_status_df["المتبقي"] > 0]
+            total_unpaid = unpaid_players["المتبقي"].sum()
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("👥 إجمالي اللاعبين", total_players)
+            col2.metric("⚠️ لاعبون غير مسددين", len(unpaid_players))
+            col3.metric("💰 إجمالي المبالغ المتبقية", f"{total_unpaid:,.0f} ج.م")
+            
+            # رسم بياني واحد فقط: توزيع طرق الدفع
+            df_all = db.get_all_memberships()
+            if not df_all.empty:
+                st.markdown("---")
+                st.subheader("📊 توزيع طرق الدفع")
+                method_counts = df_all["payment_method"].value_counts()
+                fig = px.pie(values=method_counts.values, names=method_counts.index, 
+                           title="نسبة استخدام طرق الدفع")
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("لا توجد بيانات")
 
 def coach_statistics_page():
     st.header("📊 الإحصائيات والتقارير")
@@ -675,17 +767,15 @@ def coach_statistics_page():
     if not players:
         st.warning("لا يوجد لاعبون مسجلون بعد")
         return
-    tab1, tab2 = st.tabs(["📈 إحصائيات الحضور", "💰 التحليل المالي"])
+    
+    tab1, tab2 = st.tabs(["📈 إحصائيات الحضور", "💰 ملخص مالي"])
+    
     with tab1:
         st.subheader("إحصائيات الحضور والغياب")
         summary_df = db.get_attendance_summary()
         if not summary_df.empty:
             summary_df = summary_df.sort_values("Attendance %", ascending=False)
             st.dataframe(summary_df, use_container_width=True)
-            fig = px.bar(summary_df, x="player_name", y="Attendance %", title="نسبة حضور اللاعبين",
-                        color="Attendance %", color_continuous_scale="RdYlGn")
-            fig.update_layout(yaxis_range=[0, 100])
-            st.plotly_chart(fig, use_container_width=True)
             avg_att = summary_df["Attendance %"].mean()
             best = summary_df.iloc[0]["player_name"] if not summary_df.empty else "-"
             worst = summary_df.iloc[-1]["player_name"] if not summary_df.empty else "-"
@@ -695,23 +785,18 @@ def coach_statistics_page():
             col3.metric("⚠️ الأقل حضوراً", worst)
         else:
             st.info("لا توجد بيانات حضور بعد")
+    
     with tab2:
-        st.subheader("التحليل المالي")
-        df = db.get_all_memberships()
-        if not df.empty:
-            df["payment_month"] = pd.to_datetime(df["payment_date"]).dt.to_period("M").astype(str)
-            monthly_payments = df.groupby("payment_month")["amount_paid"].sum().reset_index()
-            total_paid = df["amount_paid"].sum()
-            total_fees = df["monthly_fee"].sum()
+        st.subheader("ملخص مالي")
+        payment_df = db.get_players_payment_status()
+        if not payment_df.empty:
+            total_owed = payment_df["إجمالي المستحق"].sum()
+            total_paid = payment_df["إجمالي المدفوع"].sum()
+            total_remaining = payment_df["المتبقي"].sum()
             col1, col2, col3 = st.columns(3)
-            col1.metric("💰 إجمالي رسوم الاشتراكات", f"{total_fees:,.0f} ج.م")
-            col2.metric("💵 إجمالي المدفوعات", f"{total_paid:,.0f} ج.م")
-            col3.metric("📊 نسبة التحصيل", f"{(total_paid/total_fees*100):.1f}%" if total_fees else "0%")
-            fig = px.bar(monthly_payments, x="payment_month", y="amount_paid", title="المدفوعات الشهرية")
-            st.plotly_chart(fig, use_container_width=True)
-            method_counts = df["payment_method"].value_counts()
-            fig2 = px.pie(values=method_counts.values, names=method_counts.index, title="توزيع طرق الدفع")
-            st.plotly_chart(fig2, use_container_width=True)
+            col1.metric("💰 إجمالي المستحقات", f"{total_owed:,.0f} ج.م")
+            col2.metric("💵 إجمالي المدفوع", f"{total_paid:,.0f} ج.م")
+            col3.metric("⚠️ المتبقي", f"{total_remaining:,.0f} ج.م")
         else:
             st.info("لا توجد بيانات مالية")
 
@@ -765,10 +850,12 @@ def coach_settings_page():
                     st.error("كلمة المرور الحالية غير صحيحة")
 
 # ==================== صفحات اللاعب ====================
+
 def player_dashboard_page():
     st.header("📊 لوحة المعلومات")
     db = GoogleSheetsDB()
     player = st.session_state.username
+    
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -777,15 +864,15 @@ def player_dashboard_page():
         if not att_df.empty:
             total = len(att_df)
             present = len(att_df[att_df["status"] == "Present"])
+            absent = total - present
             rate = (present / total * 100) if total else 0
             st.metric("نسبة الحضور", f"{rate:.1f}%")
-            fig = go.Figure(data=[go.Pie(labels=["حاضر", "غائب"], values=[present, total-present],
-                                        hole=.3, marker_colors=["#2e7d32", "#d32f2f"])])
-            fig.update_layout(height=250)
-            st.plotly_chart(fig, use_container_width=True)
+            st.write(f"✅ حاضر: {present} يوم")
+            st.write(f"❌ غائب: {absent} يوم")
         else:
             st.info("لا توجد بيانات حضور بعد")
         st.markdown("</div>", unsafe_allow_html=True)
+    
     with col2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.subheader("💰 ملخص الاشتراك والمدفوعات")
@@ -797,9 +884,14 @@ def player_dashboard_page():
                 st.write(f"**ينتهي في:** {active['end_date']}")
             total_paid = mem_df["amount_paid"].sum()
             total_fees = mem_df["monthly_fee"].sum()
+            remaining = total_fees - total_paid
             st.metric("إجمالي المدفوع", f"{total_paid:,.0f} ج.م")
             st.metric("إجمالي المستحق", f"{total_fees:,.0f} ج.م")
-            st.metric("المتبقي", f"{total_fees - total_paid:,.0f} ج.م", delta_color="inverse")
+            st.metric("المتبقي", f"{remaining:,.0f} ج.م", delta_color="inverse")
+            if remaining <= 0:
+                st.success("✅ أنت مسدد بالكامل")
+            else:
+                st.warning(f"❌ متبقي عليك {remaining:,.0f} ج.م")
         else:
             st.info("لا توجد بيانات مالية")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -822,10 +914,15 @@ def player_financial_page():
         st.dataframe(df.sort_values("start_date", ascending=False), use_container_width=True)
         total_paid = df["amount_paid"].sum()
         total_fees = df["monthly_fee"].sum()
+        remaining = total_fees - total_paid
         col1, col2, col3 = st.columns(3)
         col1.metric("إجمالي المستحق", f"{total_fees:,.0f} ج.م")
         col2.metric("إجمالي المدفوع", f"{total_paid:,.0f} ج.م")
-        col3.metric("المتبقي", f"{total_fees - total_paid:,.0f} ج.م")
+        col3.metric("المتبقي", f"{remaining:,.0f} ج.م")
+        if remaining <= 0:
+            st.success("✅ أنت مسدد بالكامل")
+        else:
+            st.warning(f"❌ متبقي عليك {remaining:,.0f} ج.م")
     else:
         st.info("لا توجد سجلات")
 
