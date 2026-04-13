@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 import re
 import time
-from typing import Optional, List, Dict, Any, Tuple
 import json
+from typing import Optional, List, Dict, Any, Tuple
 
 # ==================== إعدادات الصفحة ====================
 st.set_page_config(
@@ -166,7 +166,7 @@ class GoogleSheetsDB:
         self._init_connection()
     
     def _init_connection(self):
-        """إنشاء اتصال مع Google Sheets API"""
+        """إنشاء اتصال مع Google Sheets API - مع معالجة مشكلة AttrDict"""
         try:
             scopes = [
                 "https://www.googleapis.com/auth/spreadsheets",
@@ -174,13 +174,21 @@ class GoogleSheetsDB:
             ]
             service_account_info = st.secrets["google"]["service_account"]
             
-            # التعامل مع المفتاح الخاص بشكل صحيح
-            if isinstance(service_account_info, dict):
-                creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
-            else:
-                # في حال كان secrets يحتوي على نص JSON مباشر
-                creds = Credentials.from_service_account_info(json.loads(service_account_info), scopes=scopes)
+            # ✅ تحويل AttrDict إلى قاموس عادي
+            if hasattr(service_account_info, 'to_dict'):
+                service_account_info = service_account_info.to_dict()
+            elif not isinstance(service_account_info, dict):
+                service_account_info = json.loads(service_account_info)
             
+            # ✅ إصلاح تنسيق المفتاح الخاص
+            if 'private_key' in service_account_info:
+                private_key = service_account_info['private_key']
+                private_key = private_key.replace('\\n', '\n')
+                if '-----BEGIN PRIVATE KEY-----' not in private_key:
+                    private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key + '\n-----END PRIVATE KEY-----'
+                service_account_info['private_key'] = private_key
+            
+            creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
             self._client = gspread.authorize(creds)
             self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
         except Exception as e:
