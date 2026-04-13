@@ -2,6 +2,7 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
+مع تهيئة تلقائية لحساب الكابتن الافتراضي عند أول تشغيل
 """
 
 import streamlit as st
@@ -164,6 +165,7 @@ class GoogleSheetsDB:
         self._client = None
         self._spreadsheet = None
         self._init_connection()
+        self._initialize_default_coach()  # إنشاء حساب الكابتن الافتراضي تلقائيًا
     
     def _init_connection(self):
         """إنشاء اتصال مع Google Sheets API - مع معالجة مشكلة AttrDict"""
@@ -174,13 +176,13 @@ class GoogleSheetsDB:
             ]
             service_account_info = st.secrets["google"]["service_account"]
             
-            # ✅ تحويل AttrDict إلى قاموس عادي
+            # تحويل AttrDict إلى قاموس عادي
             if hasattr(service_account_info, 'to_dict'):
                 service_account_info = service_account_info.to_dict()
             elif not isinstance(service_account_info, dict):
                 service_account_info = json.loads(service_account_info)
             
-            # ✅ إصلاح تنسيق المفتاح الخاص
+            # إصلاح تنسيق المفتاح الخاص
             if 'private_key' in service_account_info:
                 private_key = service_account_info['private_key']
                 private_key = private_key.replace('\\n', '\n')
@@ -194,6 +196,25 @@ class GoogleSheetsDB:
         except Exception as e:
             st.error(f"❌ فشل الاتصال بـ Google Sheets: {str(e)}")
             st.stop()
+    
+    def _initialize_default_coach(self):
+        """إنشاء حساب كابتن افتراضي إذا لم يكن موجودًا (يتم تنفيذها مرة واحدة عند أول تشغيل)"""
+        ws = self.get_users_sheet()
+        users = ws.get_all_records()
+        
+        # التحقق مما إذا كان هناك أي حساب من نوع coach
+        coach_exists = any(user.get("role") == "coach" for user in users)
+        
+        if not coach_exists:
+            # إنشاء حساب كابتن افتراضي
+            default_username = "أحمد محمد علي"  # اسم ثلاثي افتراضي
+            default_password = "coach123"       # كلمة مرور افتراضية
+            default_role = "coach"
+            
+            # إضافة المستخدم
+            ws.append_row([default_username, default_password, default_role, str(date.today())])
+            # يمكن إظهار رسالة في السجل (اختياري)
+            print(f"✅ تم إنشاء حساب الكابتن الافتراضي: {default_username} / {default_password}")
     
     def get_or_create_worksheet(self, title: str, headers: List[str]) -> gspread.Worksheet:
         """الحصول على ورقة عمل أو إنشائها إذا لم تكن موجودة"""
