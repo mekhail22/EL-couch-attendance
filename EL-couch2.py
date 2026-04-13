@@ -2,9 +2,8 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
+- القائمة الجانبية على اليسار
 - إخفاء شريط Streamlit العلوي
-- إصلاح القائمة الجانبية (الخلفية بيضاء والنصوص واضحة)
-- معالجة قوية لأخطاء Google Sheets API
 - دعم كامل للغة العربية
 """
 
@@ -55,7 +54,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== أنماط CSS مخصصة ====================
+# ==================== أنماط CSS مخصصة (القائمة على اليسار) ====================
 def load_css():
     st.markdown("""
     <style>
@@ -63,16 +62,19 @@ def load_css():
 
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif;
-        direction: rtl;
     }
 
-    /* إخفاء شريط Streamlit العلوي بالكامل */
+    /* المحتوى الرئيسي بالعربية من اليمين لليسار */
+    .main .block-container {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+
+    /* إخفاء شريط Streamlit العلوي */
     header[data-testid="stHeader"] {
         display: none !important;
-        visibility: hidden !important;
     }
 
-    /* إخفاء الأزرار العلوية */
     div[data-testid="stToolbar"] {
         display: none !important;
     }
@@ -85,17 +87,33 @@ def load_css():
         display: none !important;
     }
 
-    /* تحسين القائمة الجانبية */
+    /* القائمة الجانبية على اليسار مع اتجاه LTR */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
-        border-left: 1px solid #e0e0e0;
+        border-right: 1px solid #e0e0e0;
+        direction: ltr !important;
+        text-align: left !important;
     }
 
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
+        direction: ltr !important;
     }
 
-    /* تنسيق عناصر القائمة */
+    /* محتوى القائمة الجانبية: نصوص عربية تحتاج RTL */
+    section[data-testid="stSidebar"] * {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+
+    /* استثناء العناصر التي تحتاج LTR مثل الأزرار */
+    section[data-testid="stSidebar"] button,
+    section[data-testid="stSidebar"] .stRadio label {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+
+    /* تنسيق عناصر الراديو */
     .stRadio > div {
         background-color: transparent !important;
     }
@@ -113,7 +131,7 @@ def load_css():
         background-color: #f0f0f0 !important;
     }
 
-    /* تحسين مظهر الأزرار */
+    /* أزرار */
     .stButton button {
         background-color: #2e7d32;
         color: white;
