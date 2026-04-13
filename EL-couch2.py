@@ -54,7 +54,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== CSS بسيط جداً لضمان عدم إخفاء القائمة ====================
+# ==================== أنماط CSS محسنة ومضمونة ====================
 def load_css():
     st.markdown("""
     <style>
@@ -68,26 +68,47 @@ def load_css():
     .main .block-container {
         direction: rtl !important;
         text-align: right !important;
+        padding-top: 1rem !important;
     }
 
-    /* إخفاء شريط Streamlit العلوي فقط */
+    /* إخفاء شريط Streamlit العلوي */
     header[data-testid="stHeader"] {
         display: none !important;
     }
-
     div[data-testid="stToolbar"] {
         display: none !important;
     }
-
     button[kind="header"] {
         display: none !important;
     }
-
     div[data-testid="stStatusWidget"] {
         display: none !important;
     }
 
-    /* تحسين مظهر الأزرار فقط */
+    /* تنسيق الشريط الجانبي */
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff !important;
+        border-right: 1px solid #e0e0e0 !important;
+    }
+    section[data-testid="stSidebar"] .block-container {
+        padding: 1rem 0.5rem !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #1e1e1e !important;
+    }
+
+    /* تنسيق أزرار الراديو */
+    .stRadio label {
+        font-weight: 500;
+        padding: 0.5rem 0.75rem;
+        border-radius: 8px;
+        margin-bottom: 0.25rem;
+    }
+    .stRadio label:hover {
+        background-color: #f0f0f0 !important;
+    }
+
+    /* أزرار */
     .stButton button {
         background-color: #2e7d32 !important;
         color: white !important;
@@ -96,12 +117,11 @@ def load_css():
         font-weight: bold;
         border: none;
     }
-
     .stButton button:hover {
         background-color: #1b5e20 !important;
     }
 
-    /* بطاقات بسيطة */
+    /* بطاقات */
     .card {
         background: white;
         border-radius: 15px;
@@ -111,11 +131,13 @@ def load_css():
         border: 1px solid #e0e0e0;
     }
 
+    /* تنبيهات */
     .alert-warning {
         background-color: #fff3e0;
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
+        color: #1e1e1e !important;
     }
 
     .dataframe {
@@ -225,6 +247,7 @@ class GoogleSheetsDB:
         except Exception:
             pass
 
+    # ---------- المستخدمين ----------
     def get_users_sheet(self):
         return self._spreadsheet.worksheet("Users")
 
@@ -265,6 +288,7 @@ class GoogleSheetsDB:
                 return True
         return False
 
+    # ---------- الحضور ----------
     def get_attendance_sheet(self):
         return self._spreadsheet.worksheet("Attendance")
 
@@ -303,6 +327,7 @@ class GoogleSheetsDB:
             summary["Attendance %"] = 0
         return summary.reset_index()
 
+    # ---------- الاشتراكات والمدفوعات ----------
     def get_memberships_sheet(self):
         return self._spreadsheet.worksheet("Memberships")
 
@@ -385,7 +410,7 @@ class GoogleSheetsDB:
             return False, "أحرف عربية أو إنجليزية فقط"
         return True, ""
 
-# ==================== الواجهات ====================
+# ==================== واجهات المستخدم ====================
 def show_header():
     col1, col2, col3 = st.columns([1,3,1])
     with col2:
@@ -520,6 +545,15 @@ def coach_attendance_page():
         db.record_attendance(str(att_date), selected, st.session_state.username)
         st.success("تم الحفظ")
         st.rerun()
+    st.markdown("---")
+    st.subheader("سجل الحضور السابق")
+    att_data = ws.get_all_records()
+    if att_data:
+        df = pd.DataFrame(att_data).sort_values("date", ascending=False)
+        dates = sorted(df["date"].unique(), reverse=True)
+        if dates:
+            selected_date = st.selectbox("اختر تاريخ", dates)
+            st.dataframe(df[df["date"] == selected_date][["player_name", "status", "recorded_by", "recorded_at"]], use_container_width=True)
 
 def coach_memberships_page():
     st.header("💰 الاشتراكات والمدفوعات")
