@@ -2,7 +2,7 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
-- القائمة الجانبية على اليسار مع ظهور كامل
+- القائمة الجانبية على اليسار وتعمل بشكل كامل
 - إخفاء شريط Streamlit العلوي
 - دعم كامل للغة العربية
 """
@@ -54,7 +54,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== أنماط CSS محسنة (القائمة على اليسار، خلفية بيضاء، نصوص واضحة) ====================
+# ==================== CSS بسيط جداً لضمان عدم إخفاء القائمة ====================
 def load_css():
     st.markdown("""
     <style>
@@ -64,13 +64,13 @@ def load_css():
         font-family: 'Cairo', sans-serif;
     }
 
-    /* المحتوى الرئيسي بالعربية من اليمين لليسار */
+    /* المحتوى الرئيسي بالعربية */
     .main .block-container {
         direction: rtl !important;
         text-align: right !important;
     }
 
-    /* إخفاء شريط Streamlit العلوي */
+    /* إخفاء شريط Streamlit العلوي فقط */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -87,38 +87,7 @@ def load_css():
         display: none !important;
     }
 
-    /* القائمة الجانبية على اليسار مع خلفية بيضاء ونصوص داكنة */
-    section[data-testid="stSidebar"] {
-        background-color: #ffffff !important;
-        border-right: 1px solid #e0e0e0 !important;
-        color: #1e1e1e !important;
-    }
-
-    section[data-testid="stSidebar"] .block-container {
-        padding: 1rem 0.5rem !important;
-    }
-
-    /* جميع النصوص داخل القائمة الجانبية */
-    section[data-testid="stSidebar"] * {
-        color: #1e1e1e !important;
-        direction: rtl !important;
-        text-align: right !important;
-    }
-
-    /* استثناءات للـ radio buttons */
-    section[data-testid="stSidebar"] .stRadio label {
-        color: #1e1e1e !important;
-        font-weight: 500;
-        padding: 0.5rem 0.75rem;
-        border-radius: 8px;
-        margin-bottom: 0.25rem;
-    }
-
-    section[data-testid="stSidebar"] .stRadio label:hover {
-        background-color: #f0f0f0 !important;
-    }
-
-    /* أزرار */
+    /* تحسين مظهر الأزرار فقط */
     .stButton button {
         background-color: #2e7d32 !important;
         color: white !important;
@@ -132,7 +101,7 @@ def load_css():
         background-color: #1b5e20 !important;
     }
 
-    /* بطاقات */
+    /* بطاقات بسيطة */
     .card {
         background: white;
         border-radius: 15px;
@@ -142,32 +111,17 @@ def load_css():
         border: 1px solid #e0e0e0;
     }
 
-    /* تنبيهات */
     .alert-warning {
-        background-color: #fff3e0 !important;
+        background-color: #fff3e0;
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
-        color: #1e1e1e !important;
-    }
-
-    .alert-success {
-        background-color: #e8f5e9 !important;
-        border-right: 4px solid #4caf50;
-        padding: 1rem;
-        border-radius: 8px;
-        color: #1e1e1e !important;
     }
 
     .dataframe {
         border-radius: 10px;
         overflow: hidden;
         border: 1px solid #e0e0e0;
-    }
-
-    /* إصلاح أي نص مخفي */
-    .stMarkdown, .stText, .stRadio, .stSelectbox, .stDateInput, .stNumberInput {
-        color: #1e1e1e !important;
     }
     </style>
     """, unsafe_allow_html=True)
