@@ -2,7 +2,7 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
-- القائمة الجانبية على اليسار
+- القائمة الجانبية على اليسار مع ظهور كامل
 - إخفاء شريط Streamlit العلوي
 - دعم كامل للغة العربية
 """
@@ -54,7 +54,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== أنماط CSS مخصصة (القائمة على اليسار) ====================
+# ==================== أنماط CSS محسنة (القائمة على اليسار، خلفية بيضاء، نصوص واضحة) ====================
 def load_css():
     st.markdown("""
     <style>
@@ -87,54 +87,41 @@ def load_css():
         display: none !important;
     }
 
-    /* القائمة الجانبية على اليسار مع اتجاه LTR */
+    /* القائمة الجانبية على اليسار مع خلفية بيضاء ونصوص داكنة */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
-        border-right: 1px solid #e0e0e0;
-        direction: ltr !important;
-        text-align: left !important;
+        border-right: 1px solid #e0e0e0 !important;
+        color: #1e1e1e !important;
     }
 
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
-        direction: ltr !important;
     }
 
-    /* محتوى القائمة الجانبية: نصوص عربية تحتاج RTL */
+    /* جميع النصوص داخل القائمة الجانبية */
     section[data-testid="stSidebar"] * {
+        color: #1e1e1e !important;
         direction: rtl !important;
         text-align: right !important;
     }
 
-    /* استثناء العناصر التي تحتاج LTR مثل الأزرار */
-    section[data-testid="stSidebar"] button,
+    /* استثناءات للـ radio buttons */
     section[data-testid="stSidebar"] .stRadio label {
-        direction: rtl !important;
-        text-align: right !important;
-    }
-
-    /* تنسيق عناصر الراديو */
-    .stRadio > div {
-        background-color: transparent !important;
-    }
-
-    .stRadio label {
         color: #1e1e1e !important;
         font-weight: 500;
         padding: 0.5rem 0.75rem;
         border-radius: 8px;
         margin-bottom: 0.25rem;
-        transition: all 0.2s;
     }
 
-    .stRadio label:hover {
+    section[data-testid="stSidebar"] .stRadio label:hover {
         background-color: #f0f0f0 !important;
     }
 
     /* أزرار */
     .stButton button {
-        background-color: #2e7d32;
-        color: white;
+        background-color: #2e7d32 !important;
+        color: white !important;
         border-radius: 8px;
         padding: 0.5rem 1rem;
         font-weight: bold;
@@ -142,7 +129,7 @@ def load_css():
     }
 
     .stButton button:hover {
-        background-color: #1b5e20;
+        background-color: #1b5e20 !important;
     }
 
     /* بطاقات */
@@ -157,23 +144,30 @@ def load_css():
 
     /* تنبيهات */
     .alert-warning {
-        background-color: #fff3e0;
+        background-color: #fff3e0 !important;
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
+        color: #1e1e1e !important;
     }
 
     .alert-success {
-        background-color: #e8f5e9;
+        background-color: #e8f5e9 !important;
         border-right: 4px solid #4caf50;
         padding: 1rem;
         border-radius: 8px;
+        color: #1e1e1e !important;
     }
 
     .dataframe {
         border-radius: 10px;
         overflow: hidden;
         border: 1px solid #e0e0e0;
+    }
+
+    /* إصلاح أي نص مخفي */
+    .stMarkdown, .stText, .stRadio, .stSelectbox, .stDateInput, .stNumberInput {
+        color: #1e1e1e !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -514,10 +508,16 @@ def register_page():
 def coach_sidebar():
     with st.sidebar:
         display_logo()
-        st.markdown(f"<h3 style='text-align:center; color:#1e1e1e;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
         st.markdown("---")
-        menu = {"📋 تسجيل الغياب": "attendance", "💰 الاشتراكات والمدفوعات": "memberships", "📊 الإحصائيات": "statistics", "👥 اللاعبين": "players", "⚙️ الإعدادات": "settings"}
-        selected = st.radio("", list(menu.keys()), label_visibility="collapsed")
+        menu = {
+            "📋 تسجيل الغياب": "attendance",
+            "💰 الاشتراكات والمدفوعات": "memberships",
+            "📊 الإحصائيات": "statistics",
+            "👥 اللاعبين": "players",
+            "⚙️ الإعدادات": "settings"
+        }
+        selected = st.radio("القائمة", list(menu.keys()))
         st.markdown("---")
         db = GoogleSheetsDB()
         st.metric("👥 عدد اللاعبين", len(db.get_all_players()))
@@ -529,10 +529,15 @@ def coach_sidebar():
 def player_sidebar():
     with st.sidebar:
         display_logo()
-        st.markdown(f"<h3 style='text-align:center; color:#1e1e1e;'>👋 {st.session_state.username}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='text-align:center;'>👋 {st.session_state.username}</h3>", unsafe_allow_html=True)
         st.markdown("---")
-        menu = {"📊 لوحة المعلومات": "dashboard", "📅 سجل الحضور": "attendance_history", "💰 اشتراكاتي": "financial", "⚙️ الإعدادات": "settings"}
-        selected = st.radio("", list(menu.keys()), label_visibility="collapsed")
+        menu = {
+            "📊 لوحة المعلومات": "dashboard",
+            "📅 سجل الحضور": "attendance_history",
+            "💰 اشتراكاتي": "financial",
+            "⚙️ الإعدادات": "settings"
+        }
+        selected = st.radio("القائمة", list(menu.keys()))
         st.markdown("---")
         if st.button("🚪 تسجيل الخروج", use_container_width=True):
             SessionManager.logout()
