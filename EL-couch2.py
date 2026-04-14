@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
-باستخدام Streamlit و Google Sheets
-- معالجة تجاوز حصة API (429) بإعادة المحاولة مع تأخير
-- عرض سجل الغياب الكامل في صفحة الإحصائيات
-- إزالة الرسم البياني للتحليل المالي
-- دعم كامل للغة العربية
+- قائمة جانبية تفتح بزر (درج جانبي) مناسبة للهواتف
+- معالجة تجاوز حصة Google Sheets
+- عرض سجل الغياب الكامل
 """
 
 import streamlit as st
@@ -28,7 +26,7 @@ st.set_page_config(
     page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # مخفي افتراضياً
 )
 
 # ==================== تحميل الشعار ====================
@@ -40,22 +38,7 @@ def get_logo_base64() -> Optional[str]:
         return base64.b64encode(data).decode()
     return None
 
-def display_logo():
-    logo_base64 = get_logo_base64()
-    if logo_base64:
-        st.sidebar.markdown(
-            f"""
-            <div style="text-align: center; padding: 10px;">
-                <img src="data:image/jpeg;base64,{logo_base64}" width="120"
-                     style="border-radius: 50%; border: 2px solid #2e7d32;">
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    else:
-        st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
-
-# ==================== CSS محسّن ====================
+# ==================== CSS مخصص (درج جانبي) ====================
 def load_css():
     st.markdown("""
     <style>
@@ -71,6 +54,7 @@ def load_css():
         padding-top: 1rem !important;
     }
 
+    /* إخفاء الهيدر الافتراضي */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -84,22 +68,58 @@ def load_css():
         display: none !important;
     }
 
+    /* تنسيق الشريط الجانبي ليصبح درجاً */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
         border-right: 1px solid #e0e0e0 !important;
+        box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+        transition: transform 0.3s ease;
+        width: 280px !important;
+        min-width: 280px !important;
+        z-index: 999;
     }
+    /* عندما يكون الشريط مغلقاً نحركه خارج الشاشة */
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        transform: translateX(100%);
+    }
+    section[data-testid="stSidebar"][aria-expanded="true"] {
+        transform: translateX(0);
+    }
+
+    /* زر القائمة العائم */
+    .menu-button {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        z-index: 1000;
+        background-color: #2e7d32;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 48px;
+        height: 48px;
+        font-size: 24px;
+        cursor: pointer;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .menu-button:hover {
+        background-color: #1b5e20;
+    }
+
+    /* تحسين مظهر العناصر داخل الشريط */
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
     }
     section[data-testid="stSidebar"] * {
         color: #1e1e1e !important;
     }
-
     .stRadio label {
         font-weight: 500;
         padding: 0.5rem 0.75rem;
         border-radius: 8px;
-        margin-bottom: 0.25rem;
     }
     .stRadio label:hover {
         background-color: #f0f0f0 !important;
@@ -112,9 +132,6 @@ def load_css():
         padding: 0.5rem 1rem;
         font-weight: bold;
         border: none;
-    }
-    .stButton button:hover {
-        background-color: #1b5e20 !important;
     }
 
     .card {
@@ -131,7 +148,6 @@ def load_css():
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
-        color: #1e1e1e !important;
     }
 
     .dataframe {
@@ -140,6 +156,21 @@ def load_css():
         border: 1px solid #e0e0e0;
     }
     </style>
+    """, unsafe_allow_html=True)
+
+# ==================== زر القائمة الجانبية (JavaScript) ====================
+def menu_button():
+    """إضافة زر لفتح وإغلاق الشريط الجانبي باستخدام JavaScript"""
+    st.markdown("""
+    <button class="menu-button" onclick="
+        var sidebar = window.parent.document.querySelector('section[data-testid=\\'stSidebar\\']');
+        var isOpen = sidebar.getAttribute('aria-expanded') === 'true';
+        if (isOpen) {
+            sidebar.setAttribute('aria-expanded', 'false');
+        } else {
+            sidebar.setAttribute('aria-expanded', 'true');
+        }
+    ">☰</button>
     """, unsafe_allow_html=True)
 
 # ==================== إدارة الجلسات ====================
@@ -151,7 +182,8 @@ class SessionManager:
             "username": None,
             "role": None,
             "show_register": False,
-            "last_activity": time.time()
+            "last_activity": time.time(),
+            "sidebar_visible": False
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -181,7 +213,7 @@ class SessionManager:
             st.stop()
         st.session_state.last_activity = time.time()
 
-# ==================== قاعدة بيانات Google Sheets مع معالجة الحصة ====================
+# ==================== قاعدة بيانات Google Sheets ====================
 class GoogleSheetsDB:
     def __init__(self):
         self.spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
@@ -241,22 +273,19 @@ class GoogleSheetsDB:
         except Exception:
             pass
 
-    # ---------- دالة مساعدة للتعامل مع حدود API (إعادة المحاولة) ----------
     def _safe_get_all_records(self, worksheet, max_retries=5):
-        """محاولة جلب البيانات مع إعادة المحاولة في حالة تجاوز الحصة"""
         for attempt in range(max_retries):
             try:
                 return worksheet.get_all_records()
             except gspread.exceptions.APIError as e:
                 if "429" in str(e) and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + 1  # تأخير تصاعدي: 1, 2, 4, 8, ...
+                    wait_time = (2 ** attempt) + 1
                     time.sleep(wait_time)
                     continue
                 else:
                     raise e
         return []
 
-    # ---------- عمليات المستخدمين ----------
     def get_users_sheet(self):
         return self._spreadsheet.worksheet("Users")
 
@@ -298,7 +327,6 @@ class GoogleSheetsDB:
                 return True
         return False
 
-    # ---------- عمليات الحضور ----------
     def get_attendance_sheet(self):
         return self._spreadsheet.worksheet("Attendance")
 
@@ -338,14 +366,12 @@ class GoogleSheetsDB:
         return summary.reset_index()
 
     def get_all_attendance_records(self) -> pd.DataFrame:
-        """جلب جميع سجلات الحضور الخام"""
         ws = self.get_attendance_sheet()
         data = self._safe_get_all_records(ws)
         if not data:
             return pd.DataFrame()
         return pd.DataFrame(data)
 
-    # ---------- الاشتراكات والمدفوعات ----------
     def get_memberships_sheet(self):
         return self._spreadsheet.worksheet("Memberships")
 
@@ -502,9 +528,10 @@ def register_page():
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-def coach_sidebar():
-    with st.sidebar:
-        display_logo()
+def render_sidebar_content(role):
+    """عرض محتوى الشريط الجانبي بناءً على الدور"""
+    display_logo()
+    if role == "coach":
         st.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
         st.markdown("---")
         menu = {
@@ -514,7 +541,7 @@ def coach_sidebar():
             "👥 اللاعبين": "players",
             "⚙️ الإعدادات": "settings"
         }
-        selected = st.radio("القائمة", list(menu.keys()))
+        selected = st.radio("القائمة", list(menu.keys()), key="coach_menu")
         st.markdown("---")
         db = GoogleSheetsDB()
         st.metric("👥 عدد اللاعبين", len(db.get_all_players()))
@@ -522,10 +549,7 @@ def coach_sidebar():
             SessionManager.logout()
             st.rerun()
         return menu[selected]
-
-def player_sidebar():
-    with st.sidebar:
-        display_logo()
+    else:
         st.markdown(f"<h3 style='text-align:center;'>👋 {st.session_state.username}</h3>", unsafe_allow_html=True)
         st.markdown("---")
         menu = {
@@ -534,7 +558,7 @@ def player_sidebar():
             "💰 اشتراكاتي": "financial",
             "⚙️ الإعدادات": "settings"
         }
-        selected = st.radio("القائمة", list(menu.keys()))
+        selected = st.radio("القائمة", list(menu.keys()), key="player_menu")
         st.markdown("---")
         if st.button("🚪 تسجيل الخروج", use_container_width=True):
             SessionManager.logout()
@@ -543,7 +567,7 @@ def player_sidebar():
 
 # ==================== صفحات الكابتن ====================
 def coach_attendance_page():
-    st.header("📋 تسجيل الغياب (الحضور تلقائي)")
+    st.header("📋 تسجيل الغياب")
     db = GoogleSheetsDB()
     players = db.get_all_players()
     if not players:
@@ -722,6 +746,7 @@ def player_settings_page():
 def main():
     load_css()
     SessionManager.init_session()
+
     if not st.session_state.logged_in:
         if st.session_state.show_register:
             register_page()
@@ -729,19 +754,35 @@ def main():
             login_page()
     else:
         SessionManager.check_auth()
+        # عرض زر القائمة في كل صفحة
+        menu_button()
+        # استخدام الشريط الجانبي لعرض المحتوى (سيتم التحكم به عبر CSS/JS)
+        with st.sidebar:
+            if st.session_state.role == "coach":
+                selected_page = render_sidebar_content("coach")
+            else:
+                selected_page = render_sidebar_content("player")
+        # توجيه الصفحة بناءً على الاختيار
         if st.session_state.role == "coach":
-            page = coach_sidebar()
-            if page == "attendance": coach_attendance_page()
-            elif page == "memberships": coach_memberships_page()
-            elif page == "statistics": coach_statistics_page()
-            elif page == "players": coach_players_page()
-            elif page == "settings": coach_settings_page()
+            if selected_page == "attendance":
+                coach_attendance_page()
+            elif selected_page == "memberships":
+                coach_memberships_page()
+            elif selected_page == "statistics":
+                coach_statistics_page()
+            elif selected_page == "players":
+                coach_players_page()
+            elif selected_page == "settings":
+                coach_settings_page()
         else:
-            page = player_sidebar()
-            if page == "dashboard": player_dashboard_page()
-            elif page == "attendance_history": player_attendance_history_page()
-            elif page == "financial": player_financial_page()
-            elif page == "settings": player_settings_page()
+            if selected_page == "dashboard":
+                player_dashboard_page()
+            elif selected_page == "attendance_history":
+                player_attendance_history_page()
+            elif selected_page == "financial":
+                player_financial_page()
+            elif selected_page == "settings":
+                player_settings_page()
 
 if __name__ == "__main__":
     main()
