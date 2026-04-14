@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
-- قائمة جانبية تفتح من اليسار بزر
+باستخدام Streamlit و Google Sheets
+- قائمة جانبية تفتح من اليسار بزر يعتمد على session_state (موثوق 100%)
 - معالجة تجاوز حصة Google Sheets (429)
 - عرض سجل الغياب الكامل
+- رسوم اشتراك افتراضية 1500 جنيه
 """
 
 import streamlit as st
@@ -26,11 +28,12 @@ st.set_page_config(
     page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed"  # نبدأ مغلقًا
 )
 
 # ==================== تعريف الدوال الأساسية ====================
 def get_logo_base64() -> Optional[str]:
+    """تحويل صورة الشعار إلى base64 لعرضها في HTML"""
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
         with open(logo_path, "rb") as f:
@@ -39,6 +42,7 @@ def get_logo_base64() -> Optional[str]:
     return None
 
 def display_logo():
+    """عرض الشعار في الشريط الجانبي"""
     logo_base64 = get_logo_base64()
     if logo_base64:
         st.sidebar.markdown(
@@ -53,7 +57,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== CSS مخصص (القائمة من اليسار) ====================
+# ==================== CSS مخصص (القائمة من اليسار، تتحكم بها session_state) ====================
 def load_css():
     st.markdown("""
     <style>
@@ -63,13 +67,14 @@ def load_css():
         font-family: 'Cairo', sans-serif;
     }
 
+    /* المحتوى الرئيسي RTL */
     .main .block-container {
         direction: rtl !important;
         text-align: right !important;
         padding-top: 1rem !important;
     }
 
-    /* إخفاء الهيدر الافتراضي */
+    /* إخفاء الهيدر العلوي */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -83,7 +88,7 @@ def load_css():
         display: none !important;
     }
 
-    /* تنسيق الشريط الجانبي ليصبح درجاً يفتح من اليسار */
+    /* تنسيق الشريط الجانبي - درج من اليسار */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
         border-left: 1px solid #e0e0e0 !important;
@@ -93,16 +98,18 @@ def load_css():
         z-index: 999;
         transition: transform 0.3s ease;
     }
-    /* إخفاء الشريط إلى اليسار */
+
+    /* الحالة المغلقة: يختفي إلى اليسار */
     section[data-testid="stSidebar"][aria-expanded="false"] {
         transform: translateX(-100%) !important;
     }
-    /* إظهار الشريط */
+
+    /* الحالة المفتوحة: يظهر في مكانه */
     section[data-testid="stSidebar"][aria-expanded="true"] {
         transform: translateX(0) !important;
     }
 
-    /* محتوى الشريط يبقى RTL */
+    /* محتوى الشريط RTL */
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
         direction: rtl !important;
@@ -112,12 +119,15 @@ def load_css():
         color: #1e1e1e !important;
     }
 
-    /* زر القائمة في الزاوية اليمنى العليا */
-    .menu-button {
+    /* زر القائمة الثابت في الزاوية اليمنى العليا */
+    .menu-button-container {
         position: fixed;
         top: 10px;
         right: 10px;
         z-index: 1000;
+    }
+
+    .menu-button {
         background-color: #2e7d32;
         color: white;
         border: none;
@@ -131,10 +141,12 @@ def load_css():
         align-items: center;
         justify-content: center;
     }
+
     .menu-button:hover {
         background-color: #1b5e20;
     }
 
+    /* تنسيق عناصر الراديو */
     .stRadio label {
         font-weight: 500;
         padding: 0.5rem 0.75rem;
@@ -144,6 +156,7 @@ def load_css():
         background-color: #f0f0f0 !important;
     }
 
+    /* أزرار */
     .stButton button {
         background-color: #2e7d32 !important;
         color: white !important;
@@ -177,18 +190,15 @@ def load_css():
     </style>
     """, unsafe_allow_html=True)
 
+# ==================== زر القائمة الجانبية (باستخدام Streamlit Button) ====================
 def menu_button():
-    st.markdown("""
-    <button class="menu-button" onclick="
-        var sidebar = window.parent.document.querySelector('section[data-testid=\\'stSidebar\\']');
-        var isOpen = sidebar.getAttribute('aria-expanded') === 'true';
-        if (isOpen) {
-            sidebar.setAttribute('aria-expanded', 'false');
-        } else {
-            sidebar.setAttribute('aria-expanded', 'true');
-        }
-    ">☰</button>
-    """, unsafe_allow_html=True)
+    """زر يتحكم في فتح/إغلاق الشريط الجانبي عبر session_state"""
+    cols = st.columns([1, 10])  # عمود للزر وآخر فارغ
+    with cols[0]:
+        # زر بسيط بجانب العنوان
+        if st.button("☰", key="sidebar_toggle_btn", help="فتح/إغلاق القائمة"):
+            st.session_state.sidebar_visible = not st.session_state.get("sidebar_visible", False)
+            st.rerun()
 
 # ==================== إدارة الجلسات ====================
 class SessionManager:
@@ -199,7 +209,9 @@ class SessionManager:
             "username": None,
             "role": None,
             "show_register": False,
-            "last_activity": time.time()
+            "last_activity": time.time(),
+            "sidebar_visible": False,  # حالة القائمة الجانبية
+            "selected_page": None      # الصفحة المختارة
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -465,7 +477,8 @@ class GoogleSheetsDB:
 
 # ==================== واجهات المستخدم ====================
 def show_header():
-    col1, col2, col3 = st.columns([1,3,1])
+    """عرض رأس الصفحة مع الشعار"""
+    col1, col2, col3 = st.columns([1, 3, 1])
     with col2:
         if os.path.exists("logo.jpg"):
             st.image("logo.jpg", width=150)
@@ -478,7 +491,7 @@ def show_header():
 
 def login_page():
     show_header()
-    col1, col2, col3 = st.columns([1,2,1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.container():
             st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -510,7 +523,7 @@ def login_page():
 
 def register_page():
     show_header()
-    col1, col2, col3 = st.columns([1,2,1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align:center;'>📝 إنشاء حساب لاعب</h3>", unsafe_allow_html=True)
@@ -538,6 +551,7 @@ def register_page():
         st.markdown("</div>", unsafe_allow_html=True)
 
 def render_sidebar_content(role):
+    """عرض محتوى القائمة الجانبية بناءً على الدور"""
     display_logo()
     if role == "coach":
         st.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
@@ -746,10 +760,11 @@ def player_settings_page():
                     db.update_user_password(st.session_state.username, new)
                     st.success("تم")
 
-# ==================== الرئيسية ====================
+# ==================== التطبيق الرئيسي ====================
 def main():
     load_css()
     SessionManager.init_session()
+
     if not st.session_state.logged_in:
         if st.session_state.show_register:
             register_page()
@@ -757,32 +772,70 @@ def main():
             login_page()
     else:
         SessionManager.check_auth()
-        menu_button()
-        with st.sidebar:
-            if st.session_state.role == "coach":
-                selected_page = render_sidebar_content("coach")
-            else:
-                selected_page = render_sidebar_content("player")
-        if st.session_state.role == "coach":
-            if selected_page == "attendance":
-                coach_attendance_page()
-            elif selected_page == "memberships":
-                coach_memberships_page()
-            elif selected_page == "statistics":
-                coach_statistics_page()
-            elif selected_page == "players":
-                coach_players_page()
-            elif selected_page == "settings":
-                coach_settings_page()
+
+        # التحكم في ظهور الشريط الجانبي عبر session_state
+        if st.session_state.sidebar_visible:
+            # فتح الشريط: نستخدم st.sidebar لعرض المحتوى
+            with st.sidebar:
+                if st.session_state.role == "coach":
+                    selected_page = render_sidebar_content("coach")
+                else:
+                    selected_page = render_sidebar_content("player")
+            # زر صغير لإغلاق الشريط (داخل الشريط)
+            with st.sidebar:
+                if st.button("✕ إغلاق", key="close_sidebar"):
+                    st.session_state.sidebar_visible = False
+                    st.rerun()
         else:
-            if selected_page == "dashboard":
-                player_dashboard_page()
-            elif selected_page == "attendance_history":
-                player_attendance_history_page()
-            elif selected_page == "financial":
-                player_financial_page()
-            elif selected_page == "settings":
-                player_settings_page()
+            selected_page = None  # سنستخدم زر لفتح الشريط
+
+        # عرض زر فتح القائمة إذا كانت مغلقة
+        if not st.session_state.sidebar_visible:
+            cols = st.columns([1, 10])
+            with cols[0]:
+                if st.button("☰ القائمة", key="open_sidebar_btn"):
+                    st.session_state.sidebar_visible = True
+                    st.rerun()
+
+        # عرض الصفحة المحددة (إذا كان الشريط مفتوحًا وتم اختيار صفحة)
+        if st.session_state.sidebar_visible and selected_page:
+            if st.session_state.role == "coach":
+                if selected_page == "attendance":
+                    coach_attendance_page()
+                elif selected_page == "memberships":
+                    coach_memberships_page()
+                elif selected_page == "statistics":
+                    coach_statistics_page()
+                elif selected_page == "players":
+                    coach_players_page()
+                elif selected_page == "settings":
+                    coach_settings_page()
+            else:
+                if selected_page == "dashboard":
+                    player_dashboard_page()
+                elif selected_page == "attendance_history":
+                    player_attendance_history_page()
+                elif selected_page == "financial":
+                    player_financial_page()
+                elif selected_page == "settings":
+                    player_settings_page()
+        elif not st.session_state.sidebar_visible:
+            # إذا كان الشريط مغلقًا، نعرض رسالة ترحيب أو لوحة معلومات مختصرة
+            show_header()
+            st.info("☰ اضغط على زر القائمة في الأعلى لفتح القائمة الجانبية")
+            # عرض إحصائيات سريعة للمستخدم المسجل
+            db = GoogleSheetsDB()
+            if st.session_state.role == "coach":
+                players_count = len(db.get_all_players())
+                st.metric("عدد اللاعبين", players_count)
+            else:
+                player = st.session_state.username
+                att_df = db.get_attendance_for_player(player)
+                if not att_df.empty:
+                    total = len(att_df)
+                    present = len(att_df[att_df["status"] == "Present"])
+                    rate = (present / total * 100) if total else 0
+                    st.metric("نسبة حضورك", f"{rate:.1f}%")
 
 if __name__ == "__main__":
     main()
