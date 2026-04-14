@@ -2,7 +2,7 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 - قائمة جانبية تفتح بزر (درج جانبي) مناسبة للهواتف
-- معالجة تجاوز حصة Google Sheets
+- معالجة تجاوز حصة Google Sheets (429)
 - عرض سجل الغياب الكامل
 """
 
@@ -26,10 +26,10 @@ st.set_page_config(
     page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="collapsed"  # مخفي افتراضياً
+    initial_sidebar_state="collapsed"
 )
 
-# ==================== تحميل الشعار ====================
+# ==================== تعريف الدوال الأساسية أولاً ====================
 def get_logo_base64() -> Optional[str]:
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
@@ -38,7 +38,22 @@ def get_logo_base64() -> Optional[str]:
         return base64.b64encode(data).decode()
     return None
 
-# ==================== CSS مخصص (درج جانبي) ====================
+def display_logo():
+    logo_base64 = get_logo_base64()
+    if logo_base64:
+        st.sidebar.markdown(
+            f"""
+            <div style="text-align: center; padding: 10px;">
+                <img src="data:image/jpeg;base64,{logo_base64}" width="120"
+                     style="border-radius: 50%; border: 2px solid #2e7d32;">
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
+
+# ==================== CSS مخصص ====================
 def load_css():
     st.markdown("""
     <style>
@@ -54,7 +69,6 @@ def load_css():
         padding-top: 1rem !important;
     }
 
-    /* إخفاء الهيدر الافتراضي */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -68,17 +82,14 @@ def load_css():
         display: none !important;
     }
 
-    /* تنسيق الشريط الجانبي ليصبح درجاً */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
         border-right: 1px solid #e0e0e0 !important;
         box-shadow: 2px 0 8px rgba(0,0,0,0.1);
-        transition: transform 0.3s ease;
         width: 280px !important;
         min-width: 280px !important;
         z-index: 999;
     }
-    /* عندما يكون الشريط مغلقاً نحركه خارج الشاشة */
     section[data-testid="stSidebar"][aria-expanded="false"] {
         transform: translateX(100%);
     }
@@ -86,7 +97,6 @@ def load_css():
         transform: translateX(0);
     }
 
-    /* زر القائمة العائم */
     .menu-button {
         position: fixed;
         top: 10px;
@@ -105,11 +115,7 @@ def load_css():
         align-items: center;
         justify-content: center;
     }
-    .menu-button:hover {
-        background-color: #1b5e20;
-    }
 
-    /* تحسين مظهر العناصر داخل الشريط */
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
     }
@@ -121,10 +127,6 @@ def load_css():
         padding: 0.5rem 0.75rem;
         border-radius: 8px;
     }
-    .stRadio label:hover {
-        background-color: #f0f0f0 !important;
-    }
-
     .stButton button {
         background-color: #2e7d32 !important;
         color: white !important;
@@ -133,7 +135,6 @@ def load_css():
         font-weight: bold;
         border: none;
     }
-
     .card {
         background: white;
         border-radius: 15px;
@@ -142,14 +143,12 @@ def load_css():
         margin-bottom: 1rem;
         border: 1px solid #e0e0e0;
     }
-
     .alert-warning {
         background-color: #fff3e0;
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
     }
-
     .dataframe {
         border-radius: 10px;
         overflow: hidden;
@@ -158,9 +157,7 @@ def load_css():
     </style>
     """, unsafe_allow_html=True)
 
-# ==================== زر القائمة الجانبية (JavaScript) ====================
 def menu_button():
-    """إضافة زر لفتح وإغلاق الشريط الجانبي باستخدام JavaScript"""
     st.markdown("""
     <button class="menu-button" onclick="
         var sidebar = window.parent.document.querySelector('section[data-testid=\\'stSidebar\\']');
@@ -182,8 +179,7 @@ class SessionManager:
             "username": None,
             "role": None,
             "show_register": False,
-            "last_activity": time.time(),
-            "sidebar_visible": False
+            "last_activity": time.time()
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -213,7 +209,7 @@ class SessionManager:
             st.stop()
         st.session_state.last_activity = time.time()
 
-# ==================== قاعدة بيانات Google Sheets ====================
+# ==================== قاعدة البيانات ====================
 class GoogleSheetsDB:
     def __init__(self):
         self.spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
@@ -225,10 +221,7 @@ class GoogleSheetsDB:
 
     def _init_connection(self):
         try:
-            scopes = [
-                "https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"
-            ]
+            scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
             service_account_info = st.secrets["google"]["service_account"]
             if hasattr(service_account_info, 'to_dict'):
                 service_account_info = service_account_info.to_dict()
@@ -279,8 +272,7 @@ class GoogleSheetsDB:
                 return worksheet.get_all_records()
             except gspread.exceptions.APIError as e:
                 if "429" in str(e) and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + 1
-                    time.sleep(wait_time)
+                    time.sleep((2 ** attempt) + 1)
                     continue
                 else:
                     raise e
@@ -304,7 +296,7 @@ class GoogleSheetsDB:
 
     def add_user(self, username: str, password: str, role: str) -> Tuple[bool, str]:
         if not self._validate_three_part_name(username):
-            return False, "❌ يجب أن يكون الاسم ثلاثياً على الأقل (مثال: أحمد محمد علي)"
+            return False, "❌ يجب أن يكون الاسم ثلاثياً على الأقل"
         if self.user_exists(username):
             return False, "❌ اسم المستخدم موجود مسبقاً"
         if len(password) < 4:
@@ -354,8 +346,7 @@ class GoogleSheetsDB:
     def get_attendance_summary(self) -> pd.DataFrame:
         ws = self.get_attendance_sheet()
         data = self._safe_get_all_records(ws)
-        if not data:
-            return pd.DataFrame()
+        if not data: return pd.DataFrame()
         df = pd.DataFrame(data)
         summary = df.groupby(["player_name", "status"]).size().unstack(fill_value=0)
         summary["Total"] = summary.sum(axis=1)
@@ -368,9 +359,7 @@ class GoogleSheetsDB:
     def get_all_attendance_records(self) -> pd.DataFrame:
         ws = self.get_attendance_sheet()
         data = self._safe_get_all_records(ws)
-        if not data:
-            return pd.DataFrame()
-        return pd.DataFrame(data)
+        return pd.DataFrame(data) if data else pd.DataFrame()
 
     def get_memberships_sheet(self):
         return self._spreadsheet.worksheet("Memberships")
@@ -447,9 +436,9 @@ class GoogleSheetsDB:
         if not name: return False, "الاسم غير صالح"
         parts = name.strip().split()
         if len(parts) < 3:
-            return False, "يجب أن يكون الاسم ثلاثياً (مثال: أحمد محمد علي)"
+            return False, "يجب أن يكون الاسم ثلاثياً"
         if any(len(p) < 2 for p in parts):
-            return False, "كل جزء يجب أن يكون حرفين على الأقل"
+            return False, "كل جزء حرفين على الأقل"
         if not re.match(r'^[\u0600-\u06FFa-zA-Z\s]+$', name):
             return False, "أحرف عربية أو إنجليزية فقط"
         return True, ""
@@ -529,7 +518,6 @@ def register_page():
         st.markdown("</div>", unsafe_allow_html=True)
 
 def render_sidebar_content(role):
-    """عرض محتوى الشريط الجانبي بناءً على الدور"""
     display_logo()
     if role == "coach":
         st.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
@@ -644,19 +632,15 @@ def coach_statistics_page():
     db = GoogleSheetsDB()
     tab1, tab2, tab3 = st.tabs(["📋 سجل الغياب الكامل", "📈 ملخص الحضور", "📊 تصدير"])
     with tab1:
-        st.subheader("جميع سجلات الغياب")
         df = db.get_all_attendance_records()
         if not df.empty:
             st.dataframe(df.sort_values("date", ascending=False), use_container_width=True)
         else:
-            st.info("لا توجد سجلات حضور بعد")
+            st.info("لا توجد سجلات")
     with tab2:
-        st.subheader("ملخص نسب الحضور")
         summary = db.get_attendance_summary()
         if not summary.empty:
             st.dataframe(summary, use_container_width=True)
-        else:
-            st.info("لا توجد بيانات لحساب النسب")
     with tab3:
         if st.button("تصدير تقرير الحضور (Excel)"):
             summary = db.get_attendance_summary()
@@ -746,7 +730,6 @@ def player_settings_page():
 def main():
     load_css()
     SessionManager.init_session()
-
     if not st.session_state.logged_in:
         if st.session_state.show_register:
             register_page()
@@ -754,15 +737,12 @@ def main():
             login_page()
     else:
         SessionManager.check_auth()
-        # عرض زر القائمة في كل صفحة
         menu_button()
-        # استخدام الشريط الجانبي لعرض المحتوى (سيتم التحكم به عبر CSS/JS)
         with st.sidebar:
             if st.session_state.role == "coach":
                 selected_page = render_sidebar_content("coach")
             else:
                 selected_page = render_sidebar_content("player")
-        # توجيه الصفحة بناءً على الاختيار
         if st.session_state.role == "coach":
             if selected_page == "attendance":
                 coach_attendance_page()
