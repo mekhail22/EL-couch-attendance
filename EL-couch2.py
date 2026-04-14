@@ -2,9 +2,10 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
-- معالجة تجاوز حصة Google Sheets عبر التخزين المؤقت وتقليل الطلبات
-- إظهار سجل الحضور الكامل مع إمكانية التصفية
-- إخفاء الرسم البياني للتحليل المالي
+- معالجة تجاوز حصة API (429) بإعادة المحاولة مع تأخير
+- عرض سجل الغياب الكامل في صفحة الإحصائيات
+- إزالة الرسم البياني للتحليل المالي
+- دعم كامل للغة العربية
 """
 
 import streamlit as st
@@ -21,7 +22,6 @@ import base64
 import os
 from typing import Optional, List, Dict, Any, Tuple
 from io import BytesIO
-import functools
 
 # ==================== إعدادات الصفحة ====================
 st.set_page_config(
@@ -55,7 +55,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== أنماط CSS بسيطة وفعالة ====================
+# ==================== CSS محسّن ====================
 def load_css():
     st.markdown("""
     <style>
@@ -177,16 +177,11 @@ class SessionManager:
             st.stop()
         if time.time() - st.session_state.last_activity > 7200:
             SessionManager.logout()
-            st.warning("انتهت الجلسة، الرجاء تسجيل الدخول مرة أخرى")
+            st.warning("انتهت الجلسة")
             st.stop()
         st.session_state.last_activity = time.time()
 
-# ==================== الاتصال بقاعدة البيانات (Google Sheets) مع تحسين الأداء ====================
-@st.cache_resource
-def get_db_connection():
-    """إنشاء اتصال بقاعدة البيانات مرة واحدة وتخزينه مؤقتًا"""
-    return GoogleSheetsDB()
-
+# ==================== قاعدة بيانات Google Sheets مع معالجة الحصة ====================
 class GoogleSheetsDB:
     def __init__(self):
         self.spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
@@ -203,18 +198,15 @@ class GoogleSheetsDB:
                 "https://www.googleapis.com/auth/drive"
             ]
             service_account_info = st.secrets["google"]["service_account"]
-
             if hasattr(service_account_info, 'to_dict'):
                 service_account_info = service_account_info.to_dict()
             elif not isinstance(service_account_info, dict):
                 service_account_info = json.loads(service_account_info)
-
             if 'private_key' in service_account_info:
                 private_key = service_account_info['private_key'].replace('\\n', '\n')
                 if '-----BEGIN PRIVATE KEY-----' not in private_key:
                     private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key + '\n-----END PRIVATE KEY-----'
                 service_account_info['private_key'] = private_key
-
             creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
             self._client = gspread.authorize(creds)
             self._spreadsheet = self._client.open_by_key(self.spreadsheet_id)
@@ -241,7 +233,7 @@ class GoogleSheetsDB:
         try:
             ws = self._spreadsheet.worksheet("Users")
             try:
-                users = ws.get_all_records()
+                users = self._safe_get_all_records(ws)
             except:
                 users = []
             if not any(u.get("role") == "coach" for u in users):
@@ -249,36 +241,36 @@ class GoogleSheetsDB:
         except Exception:
             pass
 
-    # ---------- دوال مساعدة للتخزين المؤقت ----------
-    @st.cache_data(ttl=30)  # تخزين مؤقت لمدة 30 ثانية
-    def _get_users_data(_self):
-        """جلب بيانات المستخدمين مع تخزين مؤقت"""
-        ws = _self._spreadsheet.worksheet("Users")
-        return ws.get_all_records()
+    # ---------- دالة مساعدة للتعامل مع حدود API (إعادة المحاولة) ----------
+    def _safe_get_all_records(self, worksheet, max_retries=5):
+        """محاولة جلب البيانات مع إعادة المحاولة في حالة تجاوز الحصة"""
+        for attempt in range(max_retries):
+            try:
+                return worksheet.get_all_records()
+            except gspread.exceptions.APIError as e:
+                if "429" in str(e) and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + 1  # تأخير تصاعدي: 1, 2, 4, 8, ...
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise e
+        return []
 
-    @st.cache_data(ttl=30)
-    def _get_attendance_data(_self):
-        ws = _self._spreadsheet.worksheet("Attendance")
-        return ws.get_all_records()
-
-    @st.cache_data(ttl=30)
-    def _get_memberships_data(_self):
-        ws = _self._spreadsheet.worksheet("Memberships")
-        return ws.get_all_records()
-
-    # ---------- المستخدمين ----------
+    # ---------- عمليات المستخدمين ----------
     def get_users_sheet(self):
         return self._spreadsheet.worksheet("Users")
 
     def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
-        users = self._get_users_data()
+        ws = self.get_users_sheet()
+        users = self._safe_get_all_records(ws)
         for u in users:
             if u.get("username") == username and u.get("password") == password:
                 return u
         return None
 
     def user_exists(self, username: str) -> bool:
-        users = self._get_users_data()
+        ws = self.get_users_sheet()
+        users = self._safe_get_all_records(ws)
         return any(u.get("username") == username for u in users)
 
     def add_user(self, username: str, password: str, role: str) -> Tuple[bool, str]:
@@ -290,32 +282,30 @@ class GoogleSheetsDB:
             return False, "❌ كلمة المرور يجب أن تكون 4 أحرف على الأقل"
         ws = self.get_users_sheet()
         ws.append_row([username, password, role, str(date.today())])
-        # مسح التخزين المؤقت بعد الإضافة
-        self._get_users_data.clear()
         return True, "✅ تم إنشاء الحساب بنجاح"
 
     def get_all_players(self) -> List[str]:
-        users = self._get_users_data()
+        ws = self.get_users_sheet()
+        users = self._safe_get_all_records(ws)
         return [u["username"] for u in users if u.get("role") == "player"]
 
     def update_user_password(self, username: str, new_password: str) -> bool:
         ws = self.get_users_sheet()
-        users = self._get_users_data()
+        users = self._safe_get_all_records(ws)
         for i, u in enumerate(users, start=2):
             if u.get("username") == username:
                 ws.update(f'B{i}', new_password)
-                self._get_users_data.clear()
                 return True
         return False
 
-    # ---------- الحضور ----------
+    # ---------- عمليات الحضور ----------
     def get_attendance_sheet(self):
         return self._spreadsheet.worksheet("Attendance")
 
     def record_attendance(self, date_str: str, absent_players: List[str], coach_name: str) -> bool:
         ws = self.get_attendance_sheet()
         all_players = self.get_all_players()
-        records = self._get_attendance_data()
+        records = self._safe_get_all_records(ws)
         rows_to_delete = [i for i, r in enumerate(records, start=2) if r.get("date") == date_str]
         for row in sorted(rows_to_delete, reverse=True):
             ws.delete_rows(row)
@@ -323,18 +313,19 @@ class GoogleSheetsDB:
         for p in all_players:
             status = "Absent" if p in absent_players else "Present"
             ws.append_row([p, date_str, status, coach_name, timestamp])
-        self._get_attendance_data.clear()
         return True
 
     def get_attendance_for_player(self, player_name: str) -> pd.DataFrame:
-        data = self._get_attendance_data()
+        ws = self.get_attendance_sheet()
+        data = self._safe_get_all_records(ws)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         if not df.empty:
             return df[df["player_name"] == player_name].sort_values("date", ascending=False)
         return df
 
     def get_attendance_summary(self) -> pd.DataFrame:
-        data = self._get_attendance_data()
+        ws = self.get_attendance_sheet()
+        data = self._safe_get_all_records(ws)
         if not data:
             return pd.DataFrame()
         df = pd.DataFrame(data)
@@ -345,6 +336,14 @@ class GoogleSheetsDB:
         else:
             summary["Attendance %"] = 0
         return summary.reset_index()
+
+    def get_all_attendance_records(self) -> pd.DataFrame:
+        """جلب جميع سجلات الحضور الخام"""
+        ws = self.get_attendance_sheet()
+        data = self._safe_get_all_records(ws)
+        if not data:
+            return pd.DataFrame()
+        return pd.DataFrame(data)
 
     # ---------- الاشتراكات والمدفوعات ----------
     def get_memberships_sheet(self):
@@ -358,11 +357,11 @@ class GoogleSheetsDB:
         ws.append_row([player_name, monthly_fee, start_date, end_date, notes,
                       amount_paid, payment_method, payment_date, recorded_by,
                       datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-        self._get_memberships_data.clear()
         return True
 
     def get_all_memberships(self) -> pd.DataFrame:
-        data = self._get_memberships_data()
+        ws = self.get_memberships_sheet()
+        data = self._safe_get_all_records(ws)
         return pd.DataFrame(data) if data else pd.DataFrame()
 
     def get_player_memberships(self, player_name: str) -> pd.DataFrame:
@@ -388,13 +387,11 @@ class GoogleSheetsDB:
             if col in headers:
                 col_idx = headers.index(col) + 1
                 ws.update_cell(sheet_row, col_idx, val)
-        self._get_memberships_data.clear()
         return True
 
     def delete_membership(self, row_index: int) -> bool:
         ws = self.get_memberships_sheet()
         ws.delete_rows(row_index + 2)
-        self._get_memberships_data.clear()
         return True
 
     def get_players_payment_status(self) -> pd.DataFrame:
@@ -433,24 +430,24 @@ class GoogleSheetsDB:
 
 # ==================== واجهات المستخدم ====================
 def show_header():
-    col1, col2, col3 = st.columns([1, 3, 1])
+    col1, col2, col3 = st.columns([1,3,1])
     with col2:
         if os.path.exists("logo.jpg"):
             st.image("logo.jpg", width=150)
         st.markdown("""
-        <div style="text-align: center;">
-            <h1 style="color: #2e7d32;">⚽ الكوتش أكاديمي</h1>
+        <div style="text-align:center;">
+            <h1 style="color:#2e7d32;">⚽ الكوتش أكاديمي</h1>
             <h3>نظام إدارة الحضور والاشتراكات</h3>
         </div>
         """, unsafe_allow_html=True)
 
 def login_page():
     show_header()
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1,2,1])
     with col2:
         with st.container():
             st.markdown("<div class='card'>", unsafe_allow_html=True)
-            st.markdown("<h3 style='text-align: center;'>🔐 تسجيل الدخول</h3>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align:center;'>🔐 تسجيل الدخول</h3>", unsafe_allow_html=True)
             username = st.text_input("👤 الاسم الثلاثي", placeholder="أحمد محمد علي")
             password = st.text_input("🔒 كلمة المرور", type="password")
             col_a, col_b = st.columns(2)
@@ -459,7 +456,7 @@ def login_page():
                     if not username or not password:
                         st.error("أدخل البيانات")
                     else:
-                        db = get_db_connection()
+                        db = GoogleSheetsDB()
                         user = db.authenticate_user(username, password)
                         if user:
                             SessionManager.login(username, user["role"])
@@ -478,7 +475,7 @@ def login_page():
 
 def register_page():
     show_header()
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align:center;'>📝 إنشاء حساب لاعب</h3>", unsafe_allow_html=True)
@@ -486,7 +483,7 @@ def register_page():
         new_password = st.text_input("🔒 كلمة المرور", type="password")
         confirm = st.text_input("🔒 تأكيد كلمة المرور", type="password")
         if st.button("✅ تسجيل", type="primary", use_container_width=True):
-            db = get_db_connection()
+            db = GoogleSheetsDB()
             valid, msg = db.validate_three_part_name(new_username)
             if not valid: st.error(msg)
             elif new_password != confirm: st.error("كلمة المرور غير متطابقة")
@@ -519,7 +516,7 @@ def coach_sidebar():
         }
         selected = st.radio("القائمة", list(menu.keys()))
         st.markdown("---")
-        db = get_db_connection()
+        db = GoogleSheetsDB()
         st.metric("👥 عدد اللاعبين", len(db.get_all_players()))
         if st.button("🚪 تسجيل الخروج", use_container_width=True):
             SessionManager.logout()
@@ -546,15 +543,15 @@ def player_sidebar():
 
 # ==================== صفحات الكابتن ====================
 def coach_attendance_page():
-    st.header("📋 تسجيل الغياب")
-    db = get_db_connection()
+    st.header("📋 تسجيل الغياب (الحضور تلقائي)")
+    db = GoogleSheetsDB()
     players = db.get_all_players()
     if not players:
         st.warning("لا يوجد لاعبون")
         return
     att_date = st.date_input("📅 التاريخ", value=date.today())
     ws = db.get_attendance_sheet()
-    records = ws.get_all_records()
+    records = db._safe_get_all_records(ws)
     today_absent = [r["player_name"] for r in records if r.get("date") == str(att_date) and r.get("status") == "Absent"]
     st.info("اختر الغائبين فقط، الباقي حضور تلقائي")
     selected = st.multiselect("❌ الغائبين", players, default=today_absent)
@@ -568,7 +565,7 @@ def coach_attendance_page():
         st.rerun()
     st.markdown("---")
     st.subheader("سجل الحضور السابق")
-    att_data = ws.get_all_records()
+    att_data = db._safe_get_all_records(ws)
     if att_data:
         df = pd.DataFrame(att_data).sort_values("date", ascending=False)
         dates = sorted(df["date"].unique(), reverse=True)
@@ -578,7 +575,7 @@ def coach_attendance_page():
 
 def coach_memberships_page():
     st.header("💰 الاشتراكات والمدفوعات")
-    db = get_db_connection()
+    db = GoogleSheetsDB()
     players = db.get_all_players()
     if not players:
         st.warning("لا يوجد لاعبون")
@@ -620,62 +617,35 @@ def coach_memberships_page():
 
 def coach_statistics_page():
     st.header("📊 الإحصائيات")
-    db = get_db_connection()
-    tab1, tab2, tab3 = st.tabs(["📋 سجل الحضور الكامل", "💰 التحليل المالي", "📤 تصدير التقارير"])
-
+    db = GoogleSheetsDB()
+    tab1, tab2, tab3 = st.tabs(["📋 سجل الغياب الكامل", "📈 ملخص الحضور", "📊 تصدير"])
     with tab1:
-        st.subheader("سجل الحضور الكامل")
-        att_data = db._get_attendance_data()
-        if att_data:
-            df = pd.DataFrame(att_data).sort_values("date", ascending=False)
-            # خيار تصفية حسب التاريخ
-            dates = sorted(df["date"].unique(), reverse=True)
-            if dates:
-                selected_dates = st.multiselect("تصفية حسب التواريخ", dates, default=dates[:min(5, len(dates))])
-                filtered_df = df[df["date"].isin(selected_dates)]
-                st.dataframe(filtered_df[["player_name", "date", "status", "recorded_by", "recorded_at"]], use_container_width=True)
-            else:
-                st.info("لا توجد بيانات")
+        st.subheader("جميع سجلات الغياب")
+        df = db.get_all_attendance_records()
+        if not df.empty:
+            st.dataframe(df.sort_values("date", ascending=False), use_container_width=True)
         else:
-            st.info("لا توجد بيانات حضور")
-
+            st.info("لا توجد سجلات حضور بعد")
     with tab2:
-        st.subheader("تحليل مالي")
-        payment_df = db.get_players_payment_status()
-        if not payment_df.empty:
-            total_owed = payment_df["إجمالي المستحق"].sum()
-            total_paid = payment_df["إجمالي المدفوع"].sum()
-            remaining = total_owed - total_paid
-            col1, col2, col3 = st.columns(3)
-            col1.metric("💰 إجمالي المستحقات", f"{total_owed:,.0f} ج.م")
-            col2.metric("💵 إجمالي المدفوع", f"{total_paid:,.0f} ج.م")
-            col3.metric("⚠️ المتبقي", f"{remaining:,.0f} ج.م")
-            # بدون رسم بياني
+        st.subheader("ملخص نسب الحضور")
+        summary = db.get_attendance_summary()
+        if not summary.empty:
+            st.dataframe(summary, use_container_width=True)
         else:
-            st.info("لا توجد بيانات مالية")
-
+            st.info("لا توجد بيانات لحساب النسب")
     with tab3:
-        st.subheader("تصدير التقارير")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("📊 تصدير تقرير الحضور (Excel)", use_container_width=True):
-                summary = db.get_attendance_summary()
-                if not summary.empty:
-                    output = BytesIO()
-                    summary.to_excel(output, index=False)
-                    st.download_button("تحميل", output.getvalue(), "attendance.xlsx")
-        with col2:
-            if st.button("💰 تصدير تقرير المدفوعات (Excel)", use_container_width=True):
-                payment_df = db.get_players_payment_status()
-                if not payment_df.empty:
-                    output = BytesIO()
-                    payment_df.to_excel(output, index=False)
-                    st.download_button("تحميل", output.getvalue(), "payments.xlsx")
+        if st.button("تصدير تقرير الحضور (Excel)"):
+            summary = db.get_attendance_summary()
+            if not summary.empty:
+                output = BytesIO()
+                summary.to_excel(output, index=False)
+                st.download_button("تحميل", output.getvalue(), "attendance_summary.xlsx")
 
 def coach_players_page():
     st.header("👥 اللاعبين")
-    db = get_db_connection()
-    users = db._get_users_data()
+    db = GoogleSheetsDB()
+    ws = db.get_users_sheet()
+    users = db._safe_get_all_records(ws)
     if users:
         df = pd.DataFrame(users)
         players = df[df["role"]=="player"]
@@ -697,7 +667,7 @@ def coach_settings_page():
             if new != conf: st.error("غير متطابقة")
             elif len(new) < 4: st.error("4 أحرف")
             else:
-                db = get_db_connection()
+                db = GoogleSheetsDB()
                 if db.authenticate_user(st.session_state.username, curr):
                     db.update_user_password(st.session_state.username, new)
                     st.success("تم")
@@ -705,7 +675,7 @@ def coach_settings_page():
 # ==================== صفحات اللاعب ====================
 def player_dashboard_page():
     st.header("لوحة المعلومات")
-    db = get_db_connection()
+    db = GoogleSheetsDB()
     p = st.session_state.username
     att = db.get_attendance_for_player(p)
     if not att.empty:
@@ -721,21 +691,17 @@ def player_dashboard_page():
 
 def player_attendance_history_page():
     st.header("سجل الحضور")
-    db = get_db_connection()
+    db = GoogleSheetsDB()
     df = db.get_attendance_for_player(st.session_state.username)
     if not df.empty:
         st.dataframe(df[["date", "status"]])
-    else:
-        st.info("لا توجد بيانات")
 
 def player_financial_page():
     st.header("اشتراكاتي")
-    db = get_db_connection()
+    db = GoogleSheetsDB()
     df = db.get_player_memberships(st.session_state.username)
     if not df.empty:
         st.dataframe(df)
-    else:
-        st.info("لا توجد اشتراكات")
 
 def player_settings_page():
     st.header("الإعدادات")
@@ -747,7 +713,7 @@ def player_settings_page():
             if new != conf: st.error("غير متطابقة")
             elif len(new) < 4: st.error("4 أحرف")
             else:
-                db = get_db_connection()
+                db = GoogleSheetsDB()
                 if db.authenticate_user(st.session_state.username, curr):
                     db.update_user_password(st.session_state.username, new)
                     st.success("تم")
