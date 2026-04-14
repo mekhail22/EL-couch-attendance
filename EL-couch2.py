@@ -2,8 +2,7 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
-- شريط جانبي ثابت على اليسار
-- معالجة متقدمة لجلسات المستخدم
+- قائمة جانبية تفتح وتغلق بزر مخصص باستخدام JavaScript
 - تخزين مؤقت لتقليل استهلاك Google Sheets API
 - عرض سجل الغياب الكامل
 """
@@ -29,7 +28,7 @@ st.set_page_config(
     page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="expanded"  # الشريط مفتوح دائمًا
+    initial_sidebar_state="collapsed"  # نبدأ مغلقًا
 )
 
 # ==================== دوال التخزين المؤقت لـ Google Sheets ====================
@@ -43,13 +42,11 @@ def get_gspread_client():
         ]
         service_account_info = st.secrets["google"]["service_account"]
 
-        # تحويل AttrDict إلى dict عادي
         if hasattr(service_account_info, 'to_dict'):
             service_account_info = service_account_info.to_dict()
         elif not isinstance(service_account_info, dict):
             service_account_info = json.loads(service_account_info)
 
-        # إصلاح تنسيق private_key
         if 'private_key' in service_account_info:
             private_key = service_account_info['private_key'].replace('\\n', '\n')
             if '-----BEGIN PRIVATE KEY-----' not in private_key:
@@ -62,7 +59,7 @@ def get_gspread_client():
         st.error(f"❌ فشل الاتصال بـ Google Sheets: {str(e)}")
         st.stop()
 
-@st.cache_data(ttl=60)  # تخزين لمدة 60 ثانية
+@st.cache_data(ttl=60)
 def get_worksheet_data(sheet_name: str) -> List[Dict]:
     """جلب جميع بيانات ورقة عمل مع معالجة أخطاء الحصة"""
     max_retries = 5
@@ -78,7 +75,6 @@ def get_worksheet_data(sheet_name: str) -> List[Dict]:
                 time.sleep(delay)
                 continue
             else:
-                # في حالة فشل جميع المحاولات، نعيد قائمة فارغة
                 return []
         except Exception:
             return []
@@ -89,7 +85,6 @@ def clear_cache():
     st.cache_data.clear()
 
 def safe_append_row(sheet_name: str, row: List) -> bool:
-    """إضافة صف جديد مع إعادة المحاولة عند الحاجة"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -104,14 +99,12 @@ def safe_append_row(sheet_name: str, row: List) -> bool:
                 time.sleep((2 ** attempt) + random.uniform(0, 1))
                 continue
             else:
-                st.error(f"❌ فشل إضافة صف إلى {sheet_name}")
                 return False
         except Exception:
             return False
     return False
 
 def safe_update_cell(sheet_name: str, row: int, col: int, value) -> bool:
-    """تحديث خلية واحدة مع إعادة المحاولة"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -132,7 +125,6 @@ def safe_update_cell(sheet_name: str, row: int, col: int, value) -> bool:
     return False
 
 def safe_delete_rows(sheet_name: str, start_index: int, end_index: int = None) -> bool:
-    """حذف صف أو أكثر مع إعادة المحاولة"""
     if end_index is None:
         end_index = start_index
     max_retries = 3
@@ -141,9 +133,8 @@ def safe_delete_rows(sheet_name: str, start_index: int, end_index: int = None) -
             client = get_gspread_client()
             spreadsheet = client.open_by_key(st.secrets["google"]["spreadsheet_id"])
             worksheet = spreadsheet.worksheet(sheet_name)
-            # الحذف من الأعلى للأسفل لتجنب تغير الفهارس
-            for i in range(start_index, end_index + 1):
-                worksheet.delete_rows(start_index)  # نحذف دائماً نفس الفهرس لأن الصفوف تتحرك
+            for _ in range(start_index, end_index + 1):
+                worksheet.delete_rows(start_index)
             clear_cache()
             return True
         except gspread.exceptions.APIError as e:
@@ -180,6 +171,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
+# ==================== CSS مخصص (درج جانبي من اليسار) ====================
 def load_css():
     st.markdown("""
     <style>
@@ -195,19 +187,33 @@ def load_css():
         padding-top: 1rem !important;
     }
 
-    /* إخفاء الهيدر الافتراضي */
     header[data-testid="stHeader"] { display: none !important; }
     div[data-testid="stToolbar"] { display: none !important; }
     button[kind="header"] { display: none !important; }
     div[data-testid="stStatusWidget"] { display: none !important; }
 
-    /* تنسيق الشريط الجانبي */
+    /* تنسيق الشريط الجانبي - درج من اليسار */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
         border-left: 1px solid #e0e0e0 !important;
+        box-shadow: -2px 0 8px rgba(0,0,0,0.1);
         width: 280px !important;
         min-width: 280px !important;
+        z-index: 999;
+        transition: transform 0.3s ease !important;
     }
+
+    /* الحالة المغلقة: يختفي إلى اليسار */
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        transform: translateX(-100%) !important;
+    }
+
+    /* الحالة المفتوحة: يظهر */
+    section[data-testid="stSidebar"][aria-expanded="true"] {
+        transform: translateX(0) !important;
+    }
+
+    /* محتوى الشريط RTL */
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
         direction: rtl !important;
@@ -215,6 +221,29 @@ def load_css():
     }
     section[data-testid="stSidebar"] * {
         color: #1e1e1e !important;
+    }
+
+    /* زر القائمة الثابت */
+    .menu-button {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 1000;
+        background-color: #2e7d32;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 48px;
+        height: 48px;
+        font-size: 24px;
+        cursor: pointer;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .menu-button:hover {
+        background-color: #1b5e20;
     }
 
     .stRadio label {
@@ -259,6 +288,21 @@ def load_css():
     </style>
     """, unsafe_allow_html=True)
 
+# ==================== زر القائمة الجانبية (JavaScript) ====================
+def menu_button():
+    """زر لفتح وإغلاق الشريط الجانبي باستخدام JavaScript"""
+    st.markdown("""
+    <button class="menu-button" onclick="
+        var sidebar = window.parent.document.querySelector('section[data-testid=\\'stSidebar\\']');
+        var isOpen = sidebar.getAttribute('aria-expanded') === 'true';
+        if (isOpen) {
+            sidebar.setAttribute('aria-expanded', 'false');
+        } else {
+            sidebar.setAttribute('aria-expanded', 'true');
+        }
+    ">☰</button>
+    """, unsafe_allow_html=True)
+
 # ==================== إدارة الجلسات ====================
 class SessionManager:
     @staticmethod
@@ -269,7 +313,7 @@ class SessionManager:
             "role": None,
             "show_register": False,
             "last_activity": time.time(),
-            "selected_page": "attendance" if st.session_state.get("role") == "coach" else "dashboard"
+            "selected_page": "attendance"
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -281,7 +325,6 @@ class SessionManager:
         st.session_state.username = username
         st.session_state.role = role
         st.session_state.last_activity = time.time()
-        # تعيين الصفحة الافتراضية حسب الدور
         st.session_state.selected_page = "attendance" if role == "coach" else "dashboard"
 
     @staticmethod
@@ -317,7 +360,7 @@ class GoogleSheetsDB:
         }
         for name, headers in required.items():
             try:
-                get_worksheet_data(name)  # محاولة جلب البيانات للتأكد من وجود الورقة
+                get_worksheet_data(name)
             except Exception:
                 try:
                     client = get_gspread_client()
@@ -561,9 +604,8 @@ def register_page():
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-# ==================== القائمة الجانبية ====================
 def render_sidebar():
-    """عرض محتوى الشريط الجانبي بناءً على الدور وإرجاع الصفحة المختارة"""
+    """عرض محتوى الشريط الجانبي وإرجاع الصفحة المختارة"""
     display_logo()
     if st.session_state.role == "coach":
         st.sidebar.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
@@ -575,7 +617,6 @@ def render_sidebar():
             "👥 اللاعبين": "players",
             "⚙️ الإعدادات": "settings"
         }
-        # استخدام القيمة المخزنة كافتراضي للـ radio
         current_page = st.session_state.get("selected_page", "attendance")
         default_index = list(menu.values()).index(current_page) if current_page in menu.values() else 0
         selected_label = st.sidebar.radio(
@@ -622,7 +663,7 @@ def render_sidebar():
 
 # ==================== صفحات الكابتن ====================
 def coach_attendance_page():
-    st.header("📋 تسجيل الغياب (الحضور تلقائي)")
+    st.header("📋 تسجيل الغياب")
     db = GoogleSheetsDB()
     players = db.get_all_players()
     if not players:
@@ -803,10 +844,11 @@ def main():
             login_page()
     else:
         SessionManager.check_auth()
-        # عرض القائمة الجانبية واستلام الصفحة المختارة
-        selected_page = render_sidebar()
-
-        # عرض الصفحة المختارة في المنطقة الرئيسية
+        menu_button()  # زر القائمة الثابت
+        # محتوى الشريط الجانبي (سيظهر عند فتحه)
+        with st.sidebar:
+            selected_page = render_sidebar()
+        # عرض الصفحة المختارة
         if st.session_state.role == "coach":
             if selected_page == "attendance":
                 coach_attendance_page()
