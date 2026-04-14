@@ -2,10 +2,10 @@
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
 باستخدام Streamlit و Google Sheets
-- حل نهائي لمشكلة تجاوز حصة API (429) باستخدام التخزين المؤقت
-- قائمة جانبية تفتح من اليسار بزر يعتمد على session_state
+- شريط جانبي ثابت على اليسار
+- معالجة متقدمة لجلسات المستخدم
+- تخزين مؤقت لتقليل استهلاك Google Sheets API
 - عرض سجل الغياب الكامل
-- رسوم اشتراك افتراضية 1500 جنيه
 """
 
 import streamlit as st
@@ -29,36 +29,43 @@ st.set_page_config(
     page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"  # الشريط مفتوح دائمًا
 )
 
-# ==================== دوال التخزين المؤقت (لمعالجة حصة API) ====================
-@st.cache_resource(ttl=3600)  # الاتصال يُعاد استخدامه لمدة ساعة
+# ==================== دوال التخزين المؤقت لـ Google Sheets ====================
+@st.cache_resource(ttl=3600)
 def get_gspread_client():
-    """إنشاء عميل gspread مرة واحدة فقط مع معالجة الأخطاء"""
+    """إنشاء عميل gspread مع معالجة أخطاء الاتصال"""
     try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
         service_account_info = st.secrets["google"]["service_account"]
+
+        # تحويل AttrDict إلى dict عادي
         if hasattr(service_account_info, 'to_dict'):
             service_account_info = service_account_info.to_dict()
         elif not isinstance(service_account_info, dict):
             service_account_info = json.loads(service_account_info)
+
+        # إصلاح تنسيق private_key
         if 'private_key' in service_account_info:
             private_key = service_account_info['private_key'].replace('\\n', '\n')
             if '-----BEGIN PRIVATE KEY-----' not in private_key:
                 private_key = '-----BEGIN PRIVATE KEY-----\n' + private_key + '\n-----END PRIVATE KEY-----'
             service_account_info['private_key'] = private_key
+
         creds = Credentials.from_service_account_info(service_account_info, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"❌ فشل الاتصال بـ Google Sheets: {str(e)}")
         st.stop()
 
-@st.cache_data(ttl=60)  # تخزين بيانات الورقة لمدة 60 ثانية لتقليل الطلبات
+@st.cache_data(ttl=60)  # تخزين لمدة 60 ثانية
 def get_worksheet_data(sheet_name: str) -> List[Dict]:
-    """جلب بيانات ورقة كاملة مع إعادة المحاولة في حالة خطأ الحصة"""
+    """جلب جميع بيانات ورقة عمل مع معالجة أخطاء الحصة"""
     max_retries = 5
-    base_delay = 1
     for attempt in range(max_retries):
         try:
             client = get_gspread_client()
@@ -67,25 +74,22 @@ def get_worksheet_data(sheet_name: str) -> List[Dict]:
             return worksheet.get_all_records()
         except gspread.exceptions.APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
-                delay = (base_delay * (2 ** attempt)) + random.uniform(0, 1)
+                delay = (2 ** attempt) + random.uniform(0, 1)
                 time.sleep(delay)
                 continue
             else:
-                st.error(f"❌ فشل جلب البيانات من {sheet_name}: {e}")
+                # في حالة فشل جميع المحاولات، نعيد قائمة فارغة
                 return []
-        except Exception as e:
-            st.error(f"❌ خطأ غير متوقع: {e}")
+        except Exception:
             return []
     return []
 
-def clear_cache_for_sheet(sheet_name: str):
-    """مسح التخزين المؤقت لورقة محددة (يُستخدم بعد الكتابة)"""
+def clear_cache():
+    """مسح التخزين المؤقت للبيانات بعد أي عملية كتابة"""
     st.cache_data.clear()
-    # بديل: يمكن استخدام دالة أكثر دقة لكن نكتفي بمسح الكل لضمان التحديث
 
-# ==================== دوال مساعدة للكتابة (مع إعادة المحاولة) ====================
-def safe_append_row(sheet_name: str, row: List):
-    """إضافة صف مع إعادة المحاولة"""
+def safe_append_row(sheet_name: str, row: List) -> bool:
+    """إضافة صف جديد مع إعادة المحاولة عند الحاجة"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -93,18 +97,21 @@ def safe_append_row(sheet_name: str, row: List):
             spreadsheet = client.open_by_key(st.secrets["google"]["spreadsheet_id"])
             worksheet = spreadsheet.worksheet(sheet_name)
             worksheet.append_row(row)
-            clear_cache_for_sheet(sheet_name)  # تحديث البيانات بعد الكتابة
+            clear_cache()
             return True
         except gspread.exceptions.APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
                 time.sleep((2 ** attempt) + random.uniform(0, 1))
                 continue
             else:
-                raise e
+                st.error(f"❌ فشل إضافة صف إلى {sheet_name}")
+                return False
+        except Exception:
+            return False
     return False
 
-def safe_update_cell(sheet_name: str, row: int, col: int, value):
-    """تحديث خلية مع إعادة المحاولة"""
+def safe_update_cell(sheet_name: str, row: int, col: int, value) -> bool:
+    """تحديث خلية واحدة مع إعادة المحاولة"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -112,18 +119,20 @@ def safe_update_cell(sheet_name: str, row: int, col: int, value):
             spreadsheet = client.open_by_key(st.secrets["google"]["spreadsheet_id"])
             worksheet = spreadsheet.worksheet(sheet_name)
             worksheet.update_cell(row, col, value)
-            clear_cache_for_sheet(sheet_name)
+            clear_cache()
             return True
         except gspread.exceptions.APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
                 time.sleep((2 ** attempt) + random.uniform(0, 1))
                 continue
             else:
-                raise e
+                return False
+        except Exception:
+            return False
     return False
 
-def safe_delete_rows(sheet_name: str, start_index: int, end_index: int = None):
-    """حذف صفوف مع إعادة المحاولة"""
+def safe_delete_rows(sheet_name: str, start_index: int, end_index: int = None) -> bool:
+    """حذف صف أو أكثر مع إعادة المحاولة"""
     if end_index is None:
         end_index = start_index
     max_retries = 3
@@ -132,19 +141,22 @@ def safe_delete_rows(sheet_name: str, start_index: int, end_index: int = None):
             client = get_gspread_client()
             spreadsheet = client.open_by_key(st.secrets["google"]["spreadsheet_id"])
             worksheet = spreadsheet.worksheet(sheet_name)
+            # الحذف من الأعلى للأسفل لتجنب تغير الفهارس
             for i in range(start_index, end_index + 1):
-                worksheet.delete_rows(i)
-            clear_cache_for_sheet(sheet_name)
+                worksheet.delete_rows(start_index)  # نحذف دائماً نفس الفهرس لأن الصفوف تتحرك
+            clear_cache()
             return True
         except gspread.exceptions.APIError as e:
             if "429" in str(e) and attempt < max_retries - 1:
                 time.sleep((2 ** attempt) + random.uniform(0, 1))
                 continue
             else:
-                raise e
+                return False
+        except Exception:
+            return False
     return False
 
-# ==================== تعريف الدوال الأساسية ====================
+# ==================== تحميل الشعار والأنماط ====================
 def get_logo_base64() -> Optional[str]:
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
@@ -168,7 +180,6 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== CSS مخصص ====================
 def load_css():
     st.markdown("""
     <style>
@@ -184,42 +195,26 @@ def load_css():
         padding-top: 1rem !important;
     }
 
+    /* إخفاء الهيدر الافتراضي */
     header[data-testid="stHeader"] { display: none !important; }
     div[data-testid="stToolbar"] { display: none !important; }
     button[kind="header"] { display: none !important; }
     div[data-testid="stStatusWidget"] { display: none !important; }
 
+    /* تنسيق الشريط الجانبي */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
         border-left: 1px solid #e0e0e0 !important;
-        box-shadow: -2px 0 8px rgba(0,0,0,0.1);
         width: 280px !important;
         min-width: 280px !important;
-        z-index: 999;
-        transition: transform 0.3s ease;
-    }
-    section[data-testid="stSidebar"][aria-expanded="false"] {
-        transform: translateX(-100%) !important;
-    }
-    section[data-testid="stSidebar"][aria-expanded="true"] {
-        transform: translateX(0) !important;
     }
     section[data-testid="stSidebar"] .block-container {
         padding: 1rem 0.5rem !important;
         direction: rtl !important;
         text-align: right !important;
     }
-    section[data-testid="stSidebar"] * { color: #1e1e1e !important; }
-
-    .menu-button {
-        background-color: #2e7d32;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.5rem 1rem;
-        font-weight: bold;
-        cursor: pointer;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    section[data-testid="stSidebar"] * {
+        color: #1e1e1e !important;
     }
 
     .stRadio label {
@@ -227,6 +222,10 @@ def load_css():
         padding: 0.5rem 0.75rem;
         border-radius: 8px;
     }
+    .stRadio label:hover {
+        background-color: #f0f0f0 !important;
+    }
+
     .stButton button {
         background-color: #2e7d32 !important;
         color: white !important;
@@ -235,6 +234,7 @@ def load_css():
         font-weight: bold;
         border: none;
     }
+
     .card {
         background: white;
         border-radius: 15px;
@@ -243,12 +243,14 @@ def load_css():
         margin-bottom: 1rem;
         border: 1px solid #e0e0e0;
     }
+
     .alert-warning {
         background-color: #fff3e0;
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
     }
+
     .dataframe {
         border-radius: 10px;
         overflow: hidden;
@@ -267,8 +269,7 @@ class SessionManager:
             "role": None,
             "show_register": False,
             "last_activity": time.time(),
-            "sidebar_visible": False,
-            "selected_page": None
+            "selected_page": "attendance" if st.session_state.get("role") == "coach" else "dashboard"
         }
         for key, value in defaults.items():
             if key not in st.session_state:
@@ -280,6 +281,8 @@ class SessionManager:
         st.session_state.username = username
         st.session_state.role = role
         st.session_state.last_activity = time.time()
+        # تعيين الصفحة الافتراضية حسب الدور
+        st.session_state.selected_page = "attendance" if role == "coach" else "dashboard"
 
     @staticmethod
     def logout():
@@ -298,14 +301,13 @@ class SessionManager:
             st.stop()
         st.session_state.last_activity = time.time()
 
-# ==================== فئة قاعدة البيانات (مع استخدام التخزين المؤقت) ====================
+# ==================== فئة قاعدة البيانات ====================
 class GoogleSheetsDB:
     def __init__(self):
         self._ensure_sheets_exist()
         self._initialize_default_coach()
 
     def _ensure_sheets_exist(self):
-        """التأكد من وجود الأوراق المطلوبة (يستخدم التخزين المؤقت)"""
         required = {
             "Users": ["username", "password", "role", "created_at"],
             "Attendance": ["player_name", "date", "status", "recorded_by", "recorded_at"],
@@ -315,9 +317,8 @@ class GoogleSheetsDB:
         }
         for name, headers in required.items():
             try:
-                data = get_worksheet_data(name)  # مجرد استدعاء يتحقق من وجود الورقة
+                get_worksheet_data(name)  # محاولة جلب البيانات للتأكد من وجود الورقة
             except Exception:
-                # إذا لم تكن موجودة، ننشئها يدوياً
                 try:
                     client = get_gspread_client()
                     spreadsheet = client.open_by_key(st.secrets["google"]["spreadsheet_id"])
@@ -352,7 +353,7 @@ class GoogleSheetsDB:
 
     def add_user(self, username: str, password: str, role: str) -> Tuple[bool, str]:
         if not self._validate_three_part_name(username):
-            return False, "❌ يجب أن يكون الاسم ثلاثياً على الأقل"
+            return False, "❌ يجب أن يكون الاسم ثلاثياً على الأقل (مثال: أحمد محمد علي)"
         if self.user_exists(username):
             return False, "❌ اسم المستخدم موجود مسبقاً"
         if len(password) < 4:
@@ -368,19 +369,16 @@ class GoogleSheetsDB:
         users = get_worksheet_data("Users")
         for i, u in enumerate(users, start=2):
             if u.get("username") == username:
-                safe_update_cell("Users", i, 2, new_password)
-                return True
+                return safe_update_cell("Users", i, 2, new_password)
         return False
 
     # ---------- الحضور ----------
     def record_attendance(self, date_str: str, absent_players: List[str], coach_name: str) -> bool:
         all_players = self.get_all_players()
         records = get_worksheet_data("Attendance")
-        # حذف السجلات القديمة
         rows_to_delete = [i for i, r in enumerate(records, start=2) if r.get("date") == date_str]
         if rows_to_delete:
-            for row in sorted(rows_to_delete, reverse=True):
-                safe_delete_rows("Attendance", row)
+            safe_delete_rows("Attendance", min(rows_to_delete), max(rows_to_delete))
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for p in all_players:
             status = "Absent" if p in absent_players else "Present"
@@ -396,7 +394,8 @@ class GoogleSheetsDB:
 
     def get_attendance_summary(self) -> pd.DataFrame:
         data = get_worksheet_data("Attendance")
-        if not data: return pd.DataFrame()
+        if not data:
+            return pd.DataFrame()
         df = pd.DataFrame(data)
         summary = df.groupby(["player_name", "status"]).size().unstack(fill_value=0)
         summary["Total"] = summary.sum(axis=1)
@@ -415,12 +414,10 @@ class GoogleSheetsDB:
                       start_date: str, end_date: str, notes: str,
                       amount_paid: float, payment_method: str,
                       payment_date: str, recorded_by: str) -> bool:
-        safe_append_row("Memberships", [
-            player_name, monthly_fee, start_date, end_date, notes,
-            amount_paid, payment_method, payment_date, recorded_by,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ])
-        return True
+        row = [player_name, monthly_fee, start_date, end_date, notes,
+               amount_paid, payment_method, payment_date, recorded_by,
+               datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        return safe_append_row("Memberships", row)
 
     def get_all_memberships(self) -> pd.DataFrame:
         data = get_worksheet_data("Memberships")
@@ -443,17 +440,18 @@ class GoogleSheetsDB:
 
     def update_membership(self, row_index: int, updates: Dict) -> bool:
         ws_data = get_worksheet_data("Memberships")
-        if row_index >= len(ws_data): return False
+        if row_index >= len(ws_data):
+            return False
         headers = list(ws_data[0].keys()) if ws_data else []
         for col, val in updates.items():
             if col in headers:
                 col_idx = headers.index(col) + 1
-                safe_update_cell("Memberships", row_index + 2, col_idx, val)
+                if not safe_update_cell("Memberships", row_index + 2, col_idx, val):
+                    return False
         return True
 
     def delete_membership(self, row_index: int) -> bool:
-        safe_delete_rows("Memberships", row_index + 2)
-        return True
+        return safe_delete_rows("Memberships", row_index + 2)
 
     def get_players_payment_status(self) -> pd.DataFrame:
         players = self.get_all_players()
@@ -482,16 +480,16 @@ class GoogleSheetsDB:
         if not name: return False, "الاسم غير صالح"
         parts = name.strip().split()
         if len(parts) < 3:
-            return False, "يجب أن يكون الاسم ثلاثياً"
+            return False, "يجب أن يكون الاسم ثلاثياً (مثال: أحمد محمد علي)"
         if any(len(p) < 2 for p in parts):
-            return False, "كل جزء حرفين على الأقل"
+            return False, "كل جزء يجب أن يكون حرفين على الأقل"
         if not re.match(r'^[\u0600-\u06FFa-zA-Z\s]+$', name):
             return False, "أحرف عربية أو إنجليزية فقط"
         return True, ""
 
 # ==================== واجهات المستخدم ====================
 def show_header():
-    col1, col2, col3 = st.columns([1,3,1])
+    col1, col2, col3 = st.columns([1, 3, 1])
     with col2:
         if os.path.exists("logo.jpg"):
             st.image("logo.jpg", width=150)
@@ -504,7 +502,7 @@ def show_header():
 
 def login_page():
     show_header()
-    col1, col2, col3 = st.columns([1,2,1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.container():
             st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -536,7 +534,7 @@ def login_page():
 
 def register_page():
     show_header()
-    col1, col2, col3 = st.columns([1,2,1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<h3 style='text-align:center;'>📝 إنشاء حساب لاعب</h3>", unsafe_allow_html=True)
@@ -563,11 +561,13 @@ def register_page():
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-def render_sidebar_content(role):
+# ==================== القائمة الجانبية ====================
+def render_sidebar():
+    """عرض محتوى الشريط الجانبي بناءً على الدور وإرجاع الصفحة المختارة"""
     display_logo()
-    if role == "coach":
-        st.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
-        st.markdown("---")
+    if st.session_state.role == "coach":
+        st.sidebar.markdown(f"<h3 style='text-align:center;'>👋 كابتن<br>{st.session_state.username}</h3>", unsafe_allow_html=True)
+        st.sidebar.markdown("---")
         menu = {
             "📋 تسجيل الغياب": "attendance",
             "💰 الاشتراكات والمدفوعات": "memberships",
@@ -575,33 +575,54 @@ def render_sidebar_content(role):
             "👥 اللاعبين": "players",
             "⚙️ الإعدادات": "settings"
         }
-        selected = st.radio("القائمة", list(menu.keys()), key="coach_menu")
-        st.markdown("---")
+        # استخدام القيمة المخزنة كافتراضي للـ radio
+        current_page = st.session_state.get("selected_page", "attendance")
+        default_index = list(menu.values()).index(current_page) if current_page in menu.values() else 0
+        selected_label = st.sidebar.radio(
+            "القائمة",
+            list(menu.keys()),
+            index=default_index,
+            key="coach_menu"
+        )
+        selected_page = menu[selected_label]
+        st.session_state.selected_page = selected_page
+
+        st.sidebar.markdown("---")
         db = GoogleSheetsDB()
-        st.metric("👥 عدد اللاعبين", len(db.get_all_players()))
-        if st.button("🚪 تسجيل الخروج", use_container_width=True):
+        st.sidebar.metric("👥 عدد اللاعبين", len(db.get_all_players()))
+        if st.sidebar.button("🚪 تسجيل الخروج", use_container_width=True):
             SessionManager.logout()
             st.rerun()
-        return menu[selected]
+        return selected_page
     else:
-        st.markdown(f"<h3 style='text-align:center;'>👋 {st.session_state.username}</h3>", unsafe_allow_html=True)
-        st.markdown("---")
+        st.sidebar.markdown(f"<h3 style='text-align:center;'>👋 {st.session_state.username}</h3>", unsafe_allow_html=True)
+        st.sidebar.markdown("---")
         menu = {
             "📊 لوحة المعلومات": "dashboard",
             "📅 سجل الحضور": "attendance_history",
             "💰 اشتراكاتي": "financial",
             "⚙️ الإعدادات": "settings"
         }
-        selected = st.radio("القائمة", list(menu.keys()), key="player_menu")
-        st.markdown("---")
-        if st.button("🚪 تسجيل الخروج", use_container_width=True):
+        current_page = st.session_state.get("selected_page", "dashboard")
+        default_index = list(menu.values()).index(current_page) if current_page in menu.values() else 0
+        selected_label = st.sidebar.radio(
+            "القائمة",
+            list(menu.keys()),
+            index=default_index,
+            key="player_menu"
+        )
+        selected_page = menu[selected_label]
+        st.session_state.selected_page = selected_page
+
+        st.sidebar.markdown("---")
+        if st.sidebar.button("🚪 تسجيل الخروج", use_container_width=True):
             SessionManager.logout()
             st.rerun()
-        return menu[selected]
+        return selected_page
 
 # ==================== صفحات الكابتن ====================
 def coach_attendance_page():
-    st.header("📋 تسجيل الغياب")
+    st.header("📋 تسجيل الغياب (الحضور تلقائي)")
     db = GoogleSheetsDB()
     players = db.get_all_players()
     if not players:
@@ -782,52 +803,30 @@ def main():
             login_page()
     else:
         SessionManager.check_auth()
+        # عرض القائمة الجانبية واستلام الصفحة المختارة
+        selected_page = render_sidebar()
 
-        # زر فتح/إغلاق القائمة
-        cols = st.columns([1, 10])
-        with cols[0]:
-            if st.button("☰ القائمة" if not st.session_state.sidebar_visible else "✕ إغلاق"):
-                st.session_state.sidebar_visible = not st.session_state.sidebar_visible
-                st.rerun()
-
-        # عرض محتوى الشريط الجانبي إذا كان مفتوحاً
-        if st.session_state.sidebar_visible:
-            with st.sidebar:
-                if st.session_state.role == "coach":
-                    selected_page = render_sidebar_content("coach")
-                else:
-                    selected_page = render_sidebar_content("player")
+        # عرض الصفحة المختارة في المنطقة الرئيسية
+        if st.session_state.role == "coach":
+            if selected_page == "attendance":
+                coach_attendance_page()
+            elif selected_page == "memberships":
+                coach_memberships_page()
+            elif selected_page == "statistics":
+                coach_statistics_page()
+            elif selected_page == "players":
+                coach_players_page()
+            elif selected_page == "settings":
+                coach_settings_page()
         else:
-            selected_page = None
-
-        # عرض الصفحة المختارة
-        if selected_page:
-            if st.session_state.role == "coach":
-                if selected_page == "attendance": coach_attendance_page()
-                elif selected_page == "memberships": coach_memberships_page()
-                elif selected_page == "statistics": coach_statistics_page()
-                elif selected_page == "players": coach_players_page()
-                elif selected_page == "settings": coach_settings_page()
-            else:
-                if selected_page == "dashboard": player_dashboard_page()
-                elif selected_page == "attendance_history": player_attendance_history_page()
-                elif selected_page == "financial": player_financial_page()
-                elif selected_page == "settings": player_settings_page()
-        else:
-            show_header()
-            st.info("☰ اضغط على زر القائمة في الأعلى لفتح القائمة الجانبية")
-            db = GoogleSheetsDB()
-            if st.session_state.role == "coach":
-                players_count = len(db.get_all_players())
-                st.metric("عدد اللاعبين", players_count)
-            else:
-                player = st.session_state.username
-                att_df = db.get_attendance_for_player(player)
-                if not att_df.empty:
-                    total = len(att_df)
-                    present = len(att_df[att_df["status"] == "Present"])
-                    rate = (present / total * 100) if total else 0
-                    st.metric("نسبة حضورك", f"{rate:.1f}%")
+            if selected_page == "dashboard":
+                player_dashboard_page()
+            elif selected_page == "attendance_history":
+                player_attendance_history_page()
+            elif selected_page == "financial":
+                player_financial_page()
+            elif selected_page == "settings":
+                player_settings_page()
 
 if __name__ == "__main__":
     main()
