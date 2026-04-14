@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 تطبيق إدارة الحضور والاشتراكات لأكاديمية كرة قدم "الكوتش أكاديمي"
-- قائمة جانبية تفتح بزر (درج جانبي) مناسبة للهواتف
+- قائمة جانبية تفتح من اليسار بزر
 - معالجة تجاوز حصة Google Sheets (429)
 - عرض سجل الغياب الكامل
 """
@@ -29,7 +29,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== تعريف الدوال الأساسية أولاً ====================
+# ==================== تعريف الدوال الأساسية ====================
 def get_logo_base64() -> Optional[str]:
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
@@ -53,7 +53,7 @@ def display_logo():
     else:
         st.sidebar.markdown("""<div style="text-align: center;"><h1>⚽</h1></div>""", unsafe_allow_html=True)
 
-# ==================== CSS مخصص ====================
+# ==================== CSS مخصص (القائمة من اليسار) ====================
 def load_css():
     st.markdown("""
     <style>
@@ -69,6 +69,7 @@ def load_css():
         padding-top: 1rem !important;
     }
 
+    /* إخفاء الهيدر الافتراضي */
     header[data-testid="stHeader"] {
         display: none !important;
     }
@@ -82,25 +83,40 @@ def load_css():
         display: none !important;
     }
 
+    /* تنسيق الشريط الجانبي ليصبح درجاً يفتح من اليسار */
     section[data-testid="stSidebar"] {
         background-color: #ffffff !important;
-        border-right: 1px solid #e0e0e0 !important;
-        box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+        border-left: 1px solid #e0e0e0 !important;
+        box-shadow: -2px 0 8px rgba(0,0,0,0.1);
         width: 280px !important;
         min-width: 280px !important;
         z-index: 999;
+        transition: transform 0.3s ease;
     }
+    /* إخفاء الشريط إلى اليسار */
     section[data-testid="stSidebar"][aria-expanded="false"] {
-        transform: translateX(100%);
+        transform: translateX(-100%) !important;
     }
+    /* إظهار الشريط */
     section[data-testid="stSidebar"][aria-expanded="true"] {
-        transform: translateX(0);
+        transform: translateX(0) !important;
     }
 
+    /* محتوى الشريط يبقى RTL */
+    section[data-testid="stSidebar"] .block-container {
+        padding: 1rem 0.5rem !important;
+        direction: rtl !important;
+        text-align: right !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #1e1e1e !important;
+    }
+
+    /* زر القائمة في الزاوية اليمنى العليا */
     .menu-button {
         position: fixed;
         top: 10px;
-        left: 10px;
+        right: 10px;
         z-index: 1000;
         background-color: #2e7d32;
         color: white;
@@ -115,18 +131,19 @@ def load_css():
         align-items: center;
         justify-content: center;
     }
+    .menu-button:hover {
+        background-color: #1b5e20;
+    }
 
-    section[data-testid="stSidebar"] .block-container {
-        padding: 1rem 0.5rem !important;
-    }
-    section[data-testid="stSidebar"] * {
-        color: #1e1e1e !important;
-    }
     .stRadio label {
         font-weight: 500;
         padding: 0.5rem 0.75rem;
         border-radius: 8px;
     }
+    .stRadio label:hover {
+        background-color: #f0f0f0 !important;
+    }
+
     .stButton button {
         background-color: #2e7d32 !important;
         color: white !important;
@@ -135,6 +152,7 @@ def load_css():
         font-weight: bold;
         border: none;
     }
+
     .card {
         background: white;
         border-radius: 15px;
@@ -143,12 +161,14 @@ def load_css():
         margin-bottom: 1rem;
         border: 1px solid #e0e0e0;
     }
+
     .alert-warning {
         background-color: #fff3e0;
         border-right: 4px solid #ff9800;
         padding: 1rem;
         border-radius: 8px;
     }
+
     .dataframe {
         border-radius: 10px;
         overflow: hidden;
