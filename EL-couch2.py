@@ -26,27 +26,22 @@ st.set_page_config(
 # =============================================================================
 st.markdown("""
 <style>
-    /* إخفاء الهيدر العلوي لـ Streamlit */
     header[data-testid="stHeader"] {
         display: none !important;
     }
     
-    /* إخفاء شريط الأدوات العلوي */
     .stDeployButton {
         display: none !important;
     }
     
-    /* إخفاء قائمة Main Menu */
     #MainMenu {
         visibility: hidden !important;
     }
     
-    /* إخفاء الشريط العلوي بالكامل */
     .stApp > header {
         display: none !important;
     }
     
-    /* إخفاء زر الإعدادات */
     button[kind="header"] {
         display: none !important;
     }
@@ -97,6 +92,25 @@ st.markdown("""
         font-size: 16px;
         text-align: center;
         margin-bottom: 30px;
+    }
+    
+    .welcome-box {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 15px;
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    
+    .welcome-box h3 {
+        margin: 0;
+        font-size: 20px;
+    }
+    
+    .welcome-box p {
+        margin: 10px 0 0 0;
+        opacity: 0.9;
     }
     
     .stButton > button {
@@ -154,40 +168,12 @@ st.markdown("""
         opacity: 0.9;
     }
     
-    .success-message {
-        background: #d4edda;
-        color: #155724;
+    .info-box {
+        background: #e3f2fd;
+        border-right: 4px solid #2196f3;
         padding: 15px;
         border-radius: 10px;
-        margin-bottom: 15px;
-        border-right: 4px solid #28a745;
-    }
-    
-    .error-message {
-        background: #f8d7da;
-        color: #721c24;
-        padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 15px;
-        border-right: 4px solid #dc3545;
-    }
-    
-    .warning-message {
-        background: #fff3cd;
-        color: #856404;
-        padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 15px;
-        border-right: 4px solid #ffc107;
-    }
-    
-    .info-message {
-        background: #d1ecf1;
-        color: #0c5460;
-        padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 15px;
-        border-right: 4px solid #17a2b8;
+        margin-bottom: 20px;
     }
     
     .nav-button {
@@ -211,12 +197,6 @@ st.markdown("""
         border-color: white !important;
     }
     
-    .data-table {
-        background: white;
-        border-radius: 15px;
-        overflow: hidden;
-    }
-    
     .present-badge {
         background: #28a745;
         color: white;
@@ -234,59 +214,12 @@ st.markdown("""
         font-size: 12px;
         font-weight: 600;
     }
-    
-    .pending-badge {
-        background: #ffc107;
-        color: #000;
-        padding: 5px 15px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-    }
-    
-    /* تحسينات للـ selectbox */
-    .stSelectbox > div > div {
-        border-radius: 10px;
-    }
-    
-    /* تحسينات للـ date_input */
-    .stDateInput > div > div > input {
-        border-radius: 10px;
-    }
-    
-    /* تحسينات للـ number_input */
-    .stNumberInput > div > div > input {
-        border-radius: 10px;
-    }
-    
-    /* تحسينات للـ multiselect */
-    .stMultiSelect > div > div {
-        border-radius: 10px;
-    }
-    
-    /* تحسين التبويبات */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        background: rgba(255,255,255,0.1);
-        border-radius: 10px 10px 0 0;
-        padding: 10px 20px;
-        color: white;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: white !important;
-        color: #1a5f3f !important;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# إعداد Google Sheets
+# إعداد Google Sheets - بدون cache_resource لتجنب المشاكل
 # =============================================================================
-@st.cache_resource
 def get_google_sheets_client():
     """إنشاء اتصال بـ Google Sheets"""
     try:
@@ -304,7 +237,8 @@ def get_google_sheets_client():
             "universe_domain": st.secrets["google"]["service_account"]["universe_domain"]
         }
         spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
-    except:
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة الإعدادات: {str(e)}")
         return None, None
     
     try:
@@ -332,6 +266,37 @@ def get_workbook():
     return None
 
 # =============================================================================
+# تهيئة Sheets مع التحقق من وجودها
+# =============================================================================
+def init_sheets():
+    """تهيئة جميع Sheets مع إنشائها إذا لم تكن موجودة"""
+    workbook = get_workbook()
+    if not workbook:
+        return False
+    
+    try:
+        # قائمة الـ Sheets المطلوبة
+        required_sheets = {
+            "Users": ["username", "password", "role", "created_at"],
+            "Attendance": ["player_name", "date", "status", "recorded_by", "created_at"],
+            "Subscriptions": ["player_name", "monthly_fee", "start_date", "end_date", "subscription_status", "updated_at"],
+            "Payments": ["player_name", "amount", "payment_method", "payment_date", "notes", "recorded_by", "created_at"]
+        }
+        
+        existing_sheets = [sheet.title for sheet in workbook.worksheets()]
+        
+        for sheet_name, headers in required_sheets.items():
+            if sheet_name not in existing_sheets:
+                sheet = workbook.add_worksheet(title=sheet_name, rows=1000, cols=20)
+                sheet.append_row(headers)
+                st.info(f"✅ تم إنشاء sheet: {sheet_name}")
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ خطأ في تهيئة Sheets: {str(e)}")
+        return False
+
+# =============================================================================
 # دوال قاعدة البيانات
 # =============================================================================
 def get_users_sheet():
@@ -341,9 +306,7 @@ def get_users_sheet():
         try:
             return workbook.worksheet("Users")
         except:
-            sheet = workbook.add_worksheet(title="Users", rows=1000, cols=10)
-            sheet.append_row(["username", "password", "role", "created_at"])
-            return sheet
+            return None
     return None
 
 def get_attendance_sheet():
@@ -353,9 +316,7 @@ def get_attendance_sheet():
         try:
             return workbook.worksheet("Attendance")
         except:
-            sheet = workbook.add_worksheet(title="Attendance", rows=1000, cols=10)
-            sheet.append_row(["player_name", "date", "status", "recorded_by", "created_at"])
-            return sheet
+            return None
     return None
 
 def get_subscriptions_sheet():
@@ -365,9 +326,7 @@ def get_subscriptions_sheet():
         try:
             return workbook.worksheet("Subscriptions")
         except:
-            sheet = workbook.add_worksheet(title="Subscriptions", rows=1000, cols=10)
-            sheet.append_row(["player_name", "monthly_fee", "start_date", "end_date", "subscription_status", "updated_at"])
-            return sheet
+            return None
     return None
 
 def get_payments_sheet():
@@ -377,9 +336,7 @@ def get_payments_sheet():
         try:
             return workbook.worksheet("Payments")
         except:
-            sheet = workbook.add_worksheet(title="Payments", rows=1000, cols=10)
-            sheet.append_row(["player_name", "amount", "payment_method", "payment_date", "notes", "recorded_by", "created_at"])
-            return sheet
+            return None
     return None
 
 # =============================================================================
@@ -389,8 +346,11 @@ def get_all_users():
     """جلب جميع المستخدمين"""
     sheet = get_users_sheet()
     if sheet:
-        data = sheet.get_all_records()
-        return data
+        try:
+            data = sheet.get_all_records()
+            return data
+        except:
+            return []
     return []
 
 def get_user(username: str):
@@ -401,17 +361,29 @@ def get_user(username: str):
             return user
     return None
 
+def check_coach_exists():
+    """التحقق من وجود كابتن مسجل"""
+    users = get_all_users()
+    for user in users:
+        if user.get("role") == "coach":
+            return True
+    return False
+
 def add_user(username: str, password: str, role: str = "player"):
     """إضافة مستخدم جديد"""
     sheet = get_users_sheet()
     if sheet:
+        # التحقق من عدم التكرار
         existing = get_user(username)
         if existing:
             return False, "اسم المستخدم موجود بالفعل"
         
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([username, password, role, created_at])
-        return True, "تم إضافة المستخدم بنجاح"
+        try:
+            sheet.append_row([username, password, role, created_at])
+            return True, f"تم إضافة المستخدم بنجاح كـ {'كابتن' if role == 'coach' else 'لاعب'}"
+        except Exception as e:
+            return False, f"خطأ في حفظ البيانات: {str(e)}"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def validate_triple_name(name: str) -> bool:
@@ -443,13 +415,20 @@ def record_attendance(player_name: str, status: str, recorded_by: str):
         today = datetime.now().strftime("%Y-%m-%d")
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        all_records = sheet.get_all_records()
-        for record in all_records:
-            if record.get("player_name") == player_name and record.get("date") == today:
-                return False, "تم تسجيل الحضور مسبقاً لهذا اليوم"
+        # التحقق من عدم التكرار في نفس اليوم
+        try:
+            all_records = sheet.get_all_records()
+            for record in all_records:
+                if record.get("player_name") == player_name and record.get("date") == today:
+                    return False, "تم تسجيل الحضور مسبقاً لهذا اليوم"
+        except:
+            pass
         
-        sheet.append_row([player_name, today, status, recorded_by, created_at])
-        return True, f"تم تسجيل {'الحضور' if status == 'Present' else 'الغياب'} بنجاح"
+        try:
+            sheet.append_row([player_name, today, status, recorded_by, created_at])
+            return True, f"تم تسجيل {'الحضور' if status == 'Present' else 'الغياب'} بنجاح"
+        except Exception as e:
+            return False, f"خطأ في حفظ البيانات: {str(e)}"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
@@ -460,34 +439,49 @@ def record_multiple_attendance(player_names: list, status: str, recorded_by: str
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         success_count = 0
-        for player_name in player_names:
-            all_records = sheet.get_all_records()
-            exists = False
-            for record in all_records:
-                if record.get("player_name") == player_name and record.get("date") == today:
-                    exists = True
-                    break
-            
-            if not exists:
-                sheet.append_row([player_name, today, status, recorded_by, created_at])
-                success_count += 1
+        errors = []
         
-        return True, f"تم تسجيل {success_count} من {len(player_names)} لاعبين"
+        for player_name in player_names:
+            try:
+                # التحقق من عدم التكرار
+                all_records = sheet.get_all_records()
+                exists = False
+                for record in all_records:
+                    if record.get("player_name") == player_name and record.get("date") == today:
+                        exists = True
+                        break
+                
+                if not exists:
+                    sheet.append_row([player_name, today, status, recorded_by, created_at])
+                    success_count += 1
+            except Exception as e:
+                errors.append(str(e))
+        
+        if success_count > 0:
+            return True, f"تم تسجيل {success_count} من {len(player_names)} لاعبين"
+        else:
+            return False, "لم يتم تسجيل أي لاعب"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def get_player_attendance(player_name: str):
     """جلب سجل حضور لاعب"""
     sheet = get_attendance_sheet()
     if sheet:
-        all_records = sheet.get_all_records()
-        return [r for r in all_records if r.get("player_name") == player_name]
+        try:
+            all_records = sheet.get_all_records()
+            return [r for r in all_records if r.get("player_name") == player_name]
+        except:
+            return []
     return []
 
 def get_all_attendance():
     """جلب جميع سجلات الحضور"""
     sheet = get_attendance_sheet()
     if sheet:
-        return sheet.get_all_records()
+        try:
+            return sheet.get_all_records()
+        except:
+            return []
     return []
 
 def get_attendance_stats(player_name: str):
@@ -513,9 +507,12 @@ def get_today_attendance():
     """جلب سجلات اليوم"""
     sheet = get_attendance_sheet()
     if sheet:
-        today = datetime.now().strftime("%Y-%m-%d")
-        all_records = sheet.get_all_records()
-        return [r for r in all_records if r.get("date") == today]
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            all_records = sheet.get_all_records()
+            return [r for r in all_records if r.get("date") == today]
+        except:
+            return []
     return []
 
 # =============================================================================
@@ -525,10 +522,13 @@ def get_player_subscription(player_name: str):
     """جلب اشتراك لاعب"""
     sheet = get_subscriptions_sheet()
     if sheet:
-        all_records = sheet.get_all_records()
-        for record in all_records:
-            if record.get("player_name") == player_name:
-                return record
+        try:
+            all_records = sheet.get_all_records()
+            for record in all_records:
+                if record.get("player_name") == player_name:
+                    return record
+        except:
+            return None
     return None
 
 def add_or_update_subscription(player_name: str, monthly_fee: float, 
@@ -539,23 +539,26 @@ def add_or_update_subscription(player_name: str, monthly_fee: float,
     if sheet:
         updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        all_records = sheet.get_all_records()
-        row_idx = None
-        for idx, record in enumerate(all_records, start=2):
-            if record.get("player_name") == player_name:
-                row_idx = idx
-                break
-        
-        if row_idx:
-            sheet.update_cell(row_idx, 2, monthly_fee)
-            sheet.update_cell(row_idx, 3, start_date)
-            sheet.update_cell(row_idx, 4, end_date)
-            sheet.update_cell(row_idx, 5, subscription_status)
-            sheet.update_cell(row_idx, 6, updated_at)
-            return True, "تم تحديث الاشتراك بنجاح"
-        else:
-            sheet.append_row([player_name, monthly_fee, start_date, end_date, subscription_status, updated_at])
-            return True, "تم إضافة الاشتراك بنجاح"
+        try:
+            all_records = sheet.get_all_records()
+            row_idx = None
+            for idx, record in enumerate(all_records, start=2):
+                if record.get("player_name") == player_name:
+                    row_idx = idx
+                    break
+            
+            if row_idx:
+                sheet.update_cell(row_idx, 2, monthly_fee)
+                sheet.update_cell(row_idx, 3, start_date)
+                sheet.update_cell(row_idx, 4, end_date)
+                sheet.update_cell(row_idx, 5, subscription_status)
+                sheet.update_cell(row_idx, 6, updated_at)
+                return True, "تم تحديث الاشتراك بنجاح"
+            else:
+                sheet.append_row([player_name, monthly_fee, start_date, end_date, subscription_status, updated_at])
+                return True, "تم إضافة الاشتراك بنجاح"
+        except Exception as e:
+            return False, f"خطأ في حفظ البيانات: {str(e)}"
     
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
@@ -563,7 +566,10 @@ def get_all_subscriptions():
     """جلب جميع الاشتراكات"""
     sheet = get_subscriptions_sheet()
     if sheet:
-        return sheet.get_all_records()
+        try:
+            return sheet.get_all_records()
+        except:
+            return []
     return []
 
 # =============================================================================
@@ -575,23 +581,32 @@ def record_payment(player_name: str, amount: float, payment_method: str,
     sheet = get_payments_sheet()
     if sheet:
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([player_name, amount, payment_method, payment_date, notes, recorded_by, created_at])
-        return True, "تم تسجيل الدفعة بنجاح"
+        try:
+            sheet.append_row([player_name, amount, payment_method, payment_date, notes, recorded_by, created_at])
+            return True, "تم تسجيل الدفعة بنجاح"
+        except Exception as e:
+            return False, f"خطأ في حفظ البيانات: {str(e)}"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def get_player_payments(player_name: str):
     """جلب مدفوعات لاعب"""
     sheet = get_payments_sheet()
     if sheet:
-        all_records = sheet.get_all_records()
-        return [r for r in all_records if r.get("player_name") == player_name]
+        try:
+            all_records = sheet.get_all_records()
+            return [r for r in all_records if r.get("player_name") == player_name]
+        except:
+            return []
     return []
 
 def get_all_payments():
     """جلب جميع المدفوعات"""
     sheet = get_payments_sheet()
     if sheet:
-        return sheet.get_all_records()
+        try:
+            return sheet.get_all_records()
+        except:
+            return []
     return []
 
 def get_payment_summary(player_name: str):
@@ -607,8 +622,16 @@ def get_payment_summary(player_name: str):
             "status": "No Subscription"
         }
     
-    monthly_fee = float(subscription.get("monthly_fee", 0))
-    total_paid = sum(float(p.get("amount", 0)) for p in payments)
+    try:
+        monthly_fee = float(subscription.get("monthly_fee", 0))
+    except:
+        monthly_fee = 0
+    
+    try:
+        total_paid = sum(float(p.get("amount", 0)) for p in payments)
+    except:
+        total_paid = 0
+    
     remaining = monthly_fee - total_paid
     
     return {
@@ -1404,7 +1427,7 @@ def player_payments_page():
         st.info("لا توجد مدفوعات مسجلة لك بعد")
 
 # =============================================================================
-# صفحة تسجيل الدخول
+# صفحة تسجيل الدخول - بدون اختيار الكابتن/لاعب
 # =============================================================================
 def login_page():
     """صفحة تسجيل الدخول"""
@@ -1417,6 +1440,9 @@ def login_page():
     </style>
     """, unsafe_allow_html=True)
     
+    # التحقق من وجود كابتن
+    coach_exists = check_coach_exists()
+    
     st.markdown("""
     <div class="login-container">
         <div class="logo-container">
@@ -1426,6 +1452,21 @@ def login_page():
         </div>
     </div>
     """, unsafe_allow_html=True)
+    
+    # رسالة ترحيبية حسب وجود الكابتن
+    if not coach_exists:
+        st.markdown("""
+        <div class="welcome-box">
+            <h3>👋 مرحباً بك في الكوتش أكاديمي</h3>
+            <p>أنت أول من يسجل! سيتم تسجيلك كـ <strong>كابتن</strong> تلقائياً.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="info-box">
+            <p>👋 مرحباً! سيتم تسجيلك كـ <strong>لاعب</strong> تلقائياً.</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     tab1, tab2 = st.tabs(["🔐 تسجيل الدخول", "📝 تسجيل حساب جديد"])
     
@@ -1447,12 +1488,17 @@ def login_page():
     
     with tab2:
         st.markdown("### تسجيل حساب جديد")
+        
+        # عرض نوع الحساب الذي سيتم تسجيله
+        if not coach_exists:
+            st.info("👨‍🏫 سيتم تسجيلك كـ **كابتن** (أول مستخدم في النظام)")
+        else:
+            st.info("👤 سيتم تسجيلك كـ **لاعب**")
+        
         new_username = st.text_input("الاسم الثلاثي", key="reg_username",
                                       placeholder="مثال: أحمد محمد علي")
         new_password = st.text_input("كلمة المرور", type="password", key="reg_password")
         confirm_password = st.text_input("تأكيد كلمة المرور", type="password", key="reg_confirm")
-        role = st.selectbox("نوع الحساب", ["player", "coach"], 
-                           format_func=lambda x: "👤 لاعب" if x == "player" else "👨‍🏫 كابتن")
         
         if st.button("تسجيل الحساب", key="btn_register"):
             if not new_username or not new_password:
@@ -1464,6 +1510,9 @@ def login_page():
             elif len(new_password) < 6:
                 st.error("❌ كلمة المرور يجب أن تكون 6 أحرف على الأقل")
             else:
+                # تحديد نوع الحساب تلقائياً
+                role = "coach" if not coach_exists else "player"
+                
                 success, message = add_user(new_username, new_password, role)
                 if success:
                     st.success(f"✅ {message}")
@@ -1476,7 +1525,13 @@ def login_page():
 # =============================================================================
 def main():
     """الدالة الرئيسية للتطبيق"""
+    # تهيئة الجلسة
     init_session()
+    
+    # تهيئة Sheets عند أول تشغيل
+    if "sheets_initialized" not in st.session_state:
+        if init_sheets():
+            st.session_state.sheets_initialized = True
     
     # عرض الشريط الجانبي فقط إذا كان المستخدم مسجل الدخول
     if st.session_state.logged_in:
