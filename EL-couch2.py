@@ -59,46 +59,43 @@ st.markdown("""
         display: none !important;
     }
     
-    /* شريط التنقل العلوي المخصص */
-    .nav-bar {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 10px;
-        padding: 15px 20px;
+    /* حاوية شريط التنقل المخصص */
+    .nav-container {
         background: rgba(255, 255, 255, 0.1);
         backdrop-filter: blur(10px);
         border-radius: 50px;
+        padding: 10px 20px;
         margin: 20px 0;
         border: 1px solid rgba(255,255,255,0.2);
     }
     
-    .nav-button {
-        background: transparent;
-        color: white;
-        border: 2px solid rgba(255,255,255,0.3);
-        border-radius: 30px;
-        padding: 10px 25px;
-        font-size: 16px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-block;
+    /* تنسيق الأزرار داخل شريط التنقل */
+    .nav-container .stButton > button {
+        background: transparent !important;
+        color: white !important;
+        border: 2px solid rgba(255,255,255,0.3) !important;
+        border-radius: 30px !important;
+        padding: 10px 15px !important;
+        font-size: 16px !important;
+        font-weight: 600 !important;
+        transition: all 0.3s ease !important;
+        box-shadow: none !important;
+        width: 100% !important;
     }
     
-    .nav-button:hover {
-        background: white;
+    .nav-container .stButton > button:hover {
+        background: white !important;
         color: #1a5f3f !important;
-        border-color: white;
+        border-color: white !important;
         transform: translateY(-2px);
     }
     
-    .nav-button.active {
-        background: white;
+    /* زر الصفحة النشطة */
+    .nav-container .stButton > button.active-nav {
+        background: white !important;
         color: #1a5f3f !important;
-        border-color: white;
-        box-shadow: 0 4px 15px rgba(255,255,255,0.3);
+        border-color: white !important;
+        box-shadow: 0 4px 15px rgba(255,255,255,0.3) !important;
     }
     
     /* حاوية تسجيل الدخول */
@@ -155,7 +152,7 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* تحسين الأزرار */
+    /* تحسين الأزرار العامة */
     .stButton > button {
         background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
         color: white;
@@ -196,6 +193,15 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background: white !important;
         color: #1a5f3f !important;
+    }
+    
+    /* تنسيق عنوان المستخدم في شريط التنقل */
+    .user-info {
+        color: white;
+        font-size: 16px;
+        font-weight: 600;
+        padding: 10px 0;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -630,34 +636,37 @@ def logout():
     st.session_state.username = None
     st.session_state.role = None
     st.session_state.current_page = "login"
+    st.rerun()
 
 def navigate_to(page: str):
     st.session_state.current_page = page
     st.rerun()
 
 # =============================================================================
-# شريط التنقل العلوي (Navigation Bar)
+# شريط التنقل العلوي (باستخدام أزرار Streamlit)
 # =============================================================================
 def navigation_bar():
-    """عرض شريط التنقل الأفقي في أعلى الصفحة"""
-    # معلومات المستخدم
-    role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
-    role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
+    """عرض شريط التنقل الأفقي مع أزرار Streamlit"""
     
-    # حاوية شريط التنقل
-    st.markdown(f"""
-    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: rgba(255,255,255,0.1); border-radius: 15px; margin-bottom: 20px;">
-        <div style="display: flex; align-items: center; gap: 15px;">
+    # عرض شعار التطبيق ومعلومات المستخدم
+    col_logo, col_user = st.columns([2, 1])
+    with col_logo:
+        st.markdown("""
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 0;">
             <span style="font-size: 30px;">⚽</span>
-            <h2 style="color: white; margin: 0; font-size: 20px;">الكوتش أكاديمي</h2>
+            <h2 style="color: white; margin: 0; font-size: 22px;">الكوتش أكاديمي</h2>
         </div>
-        <div style="display: flex; align-items: center; gap: 15px;">
-            <span style="color: white; font-size: 16px;">{role_icon} {st.session_state.username} ({role_text})</span>
+        """, unsafe_allow_html=True)
+    with col_user:
+        role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
+        role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
+        st.markdown(f"""
+        <div class="user-info">
+            {role_icon} {st.session_state.username} ({role_text})
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
     
-    # تعريف الصفحات حسب الدور
+    # تحديد الصفحات حسب الدور
     if st.session_state.role == "coach":
         pages = {
             "dashboard": "📊 لوحة التحكم",
@@ -673,34 +682,48 @@ def navigation_bar():
             "my_subscription": "💳 اشتراكي ومدفوعاتي"
         }
     
-    # إنشاء أزرار HTML مخصصة
-    nav_html = '<div class="nav-bar">'
-    for page_key, page_label in pages.items():
-        active_class = "active" if st.session_state.current_page == page_key else ""
-        nav_html += f'<a href="?page={page_key}" target="_self" class="nav-button {active_class}">{page_label}</a>'
-    
-    # إضافة زر تسجيل الخروج
-    nav_html += f'<a href="?logout=true" target="_self" class="nav-button" style="background: rgba(255,100,100,0.3); border-color: #ff6b6b;">🚪 تسجيل الخروج</a>'
-    nav_html += '</div>'
-    
-    st.markdown(nav_html, unsafe_allow_html=True)
-    
-    # معالجة التنقل عبر query parameters
-    query_params = st.query_params
-    if "page" in query_params:
-        page = query_params["page"]
-        if page in pages:
-            if st.session_state.current_page != page:
-                st.session_state.current_page = page
-                st.rerun()
-        else:
-            # إزالة المعامل غير الصحيح
-            st.query_params.clear()
-    
-    if "logout" in query_params:
-        logout()
-        st.query_params.clear()
-        st.rerun()
+    # إنشاء حاوية للأزرار
+    with st.container():
+        st.markdown('<div class="nav-container">', unsafe_allow_html=True)
+        
+        # حساب عدد الأزرار لتوزيعها في أعمدة
+        num_buttons = len(pages) + 1  # +1 لزر تسجيل الخروج
+        cols = st.columns(num_buttons)
+        
+        # أزرار الصفحات
+        for idx, (page_key, page_label) in enumerate(pages.items()):
+            with cols[idx]:
+                # تحديد ما إذا كان الزر نشطاً
+                is_active = (st.session_state.current_page == page_key)
+                # إضافة class مخصص للزر النشط عبر CSS
+                if is_active:
+                    st.markdown("""
+                    <style>
+                    .stButton > button.active-nav {
+                        background: white !important;
+                        color: #1a5f3f !important;
+                        border-color: white !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                
+                # استخدام مفتاح فريد لكل زر مع حالة النشاط
+                button_key = f"nav_{page_key}"
+                if st.button(
+                    page_label,
+                    key=button_key,
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary",
+                    kwargs={"class": "active-nav"} if is_active else {}
+                ):
+                    navigate_to(page_key)
+        
+        # زر تسجيل الخروج
+        with cols[-1]:
+            if st.button("🚪 تسجيل الخروج", key="nav_logout", use_container_width=True):
+                logout()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # =============================================================================
 # صفحات الكابتن
