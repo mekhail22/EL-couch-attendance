@@ -22,26 +22,65 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CSS مخصص - تحسين التصميم مع إظهار زر القائمة الجانبية
+# CSS مخصص - إخفاء الهيدر بالكامل وإظهار زر القائمة فقط
 # =============================================================================
 st.markdown("""
 <style>
-    /* إخفاء الهيدر العلوي فقط مع الإبقاء على زر القائمة */
+    /* إخفاء كامل شريط Streamlit العلوي */
     header[data-testid="stHeader"] {
-        background: transparent !important;
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
     }
-    .stDeployButton { display: none !important; }
-    #MainMenu { visibility: hidden !important; }
     
-    /* إظهار زر الهامبرغر بشكل واضح */
-    button[kind="header"] {
-        background: rgba(255,255,255,0.2) !important;
-        border-radius: 8px !important;
-        color: white !important;
-        margin: 5px !important;
+    /* إخفاء أي عناصر أخرى في الشريط العلوي */
+    .stDeployButton,
+    .stActionButton,
+    #MainMenu,
+    footer,
+    div[data-testid="stToolbar"],
+    div[data-testid="stDecoration"],
+    div[data-testid="stStatusWidget"],
+    .stApp > header,
+    .stApp > div:first-child > div:first-child {
+        display: none !important;
     }
-    button[kind="header"]:hover {
-        background: rgba(255,255,255,0.3) !important;
+    
+    /* إخفاء النص الغريب الموجود على زر القائمة */
+    button[kind="header"] span,
+    button[data-testid="baseButton-header"] span {
+        display: none !important;
+    }
+    
+    /* إعادة تصميم زر القائمة الجانبية ليكون ظاهراً وأنيقاً */
+    button[kind="header"],
+    button[data-testid="baseButton-header"] {
+        position: fixed !important;
+        top: 15px !important;
+        left: 15px !important;
+        z-index: 999 !important;
+        background: white !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+        width: 45px !important;
+        height: 45px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border: none !important;
+        color: #1a5f3f !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* إضافة أيقونة الهامبرغر يدوياً */
+    button[kind="header"]::before {
+        content: "☰" !important;
+        font-size: 28px !important;
+        font-weight: bold !important;
+        color: #1a5f3f !important;
+        display: block !important;
+        visibility: visible !important;
     }
     
     /* الخطوط */
@@ -894,53 +933,53 @@ def coach_subscriptions_payments_page():
         
         if not players:
             st.warning("⚠️ لا يوجد لاعبين مسجلين")
-            return
-        
-        selected_player = st.selectbox("اختر اللاعب", players, key="sub_player")
-        current_sub = get_player_subscription(selected_player)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            monthly_fee = st.number_input("الرسوم الشهرية (جنيه)", min_value=0.0, value=float(current_sub.get("monthly_fee", 0)) if current_sub else 0.0, step=50.0)
-        
-        with col2:
-            status_options = ["Active", "Expired", "Suspended"]
-            status_index = 0
-            if current_sub:
-                try:
-                    status_index = status_options.index(current_sub.get("subscription_status", "Active"))
-                except:
-                    status_index = 0
-                    
-            status = st.selectbox("حالة الاشتراك", status_options, index=status_index, format_func=lambda x: "🟢 نشط" if x == "Active" else ("🔴 منتهي" if x == "Expired" else "🟡 معلق"))
-        
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            default_start = date.today()
-            if current_sub and current_sub.get("start_date"):
-                try:
-                    default_start = datetime.strptime(current_sub.get("start_date"), "%Y-%m-%d").date()
-                except:
-                    pass
-            start_date = st.date_input("تاريخ البدء", value=default_start)
-        
-        with col4:
-            default_end = date.today() + timedelta(days=30)
-            if current_sub and current_sub.get("end_date"):
-                try:
-                    default_end = datetime.strptime(current_sub.get("end_date"), "%Y-%m-%d").date()
-                except:
-                    pass
-            end_date = st.date_input("تاريخ الانتهاء", value=default_end)
-        
-        if st.button("💾 حفظ الاشتراك", key="btn_save_sub"):
-            success, message = add_or_update_subscription(selected_player, monthly_fee, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), status)
-            if success:
-                st.success(f"✅ {message}")
-            else:
-                st.error(f"❌ {message}")
+        else:
+            selected_player = st.selectbox("اختر اللاعب", players, key="sub_player")
+            current_sub = get_player_subscription(selected_player)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                monthly_fee = st.number_input("الرسوم الشهرية (جنيه)", min_value=0.0, value=float(current_sub.get("monthly_fee", 0)) if current_sub else 0.0, step=50.0)
+            
+            with col2:
+                status_options = ["Active", "Expired", "Suspended"]
+                status_index = 0
+                if current_sub:
+                    try:
+                        status_index = status_options.index(current_sub.get("subscription_status", "Active"))
+                    except:
+                        status_index = 0
+                        
+                status = st.selectbox("حالة الاشتراك", status_options, index=status_index, format_func=lambda x: "🟢 نشط" if x == "Active" else ("🔴 منتهي" if x == "Expired" else "🟡 معلق"))
+            
+            col3, col4 = st.columns(2)
+            
+            with col3:
+                default_start = date.today()
+                if current_sub and current_sub.get("start_date"):
+                    try:
+                        default_start = datetime.strptime(current_sub.get("start_date"), "%Y-%m-%d").date()
+                    except:
+                        pass
+                start_date = st.date_input("تاريخ البدء", value=default_start)
+            
+            with col4:
+                default_end = date.today() + timedelta(days=30)
+                if current_sub and current_sub.get("end_date"):
+                    try:
+                        default_end = datetime.strptime(current_sub.get("end_date"), "%Y-%m-%d").date()
+                    except:
+                        pass
+                end_date = st.date_input("تاريخ الانتهاء", value=default_end)
+            
+            if st.button("💾 حفظ الاشتراك", key="btn_save_sub"):
+                success, message = add_or_update_subscription(selected_player, monthly_fee, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"), status)
+                if success:
+                    st.success(f"✅ {message}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {message}")
     
     # --- التبويب 3: تسجيل دفعة وسجل المدفوعات ---
     with tab3:
@@ -954,35 +993,35 @@ def coach_subscriptions_payments_page():
             
             if not players:
                 st.warning("⚠️ لا يوجد لاعبين مسجلين")
-                return
-            
-            selected_player_pay = st.selectbox("اختر اللاعب", players, key="pay_player")
-            summary = get_payment_summary(selected_player_pay)
-            
-            # عرض ملخص سريع
-            st.markdown("---")
-            st.caption("ملخص الاشتراك")
-            st.metric("الرسوم الشهرية", f"{summary['monthly_fee']:,.0f} جنيه")
-            st.metric("إجمالي المدفوع", f"{summary['total_paid']:,.0f} جنيه")
-            st.metric("المتبقي", f"{summary['remaining']:,.0f} جنيه")
-            st.markdown("---")
-            
-            amount = st.number_input("المبلغ (جنيه)", min_value=0.0, step=50.0)
-            payment_method = st.selectbox("طريقة الدفع", ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"], 
-                                        format_func=lambda x: {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}.get(x, x))
-            payment_date = st.date_input("تاريخ الدفع", value=date.today())
-            notes = st.text_area("ملاحظات", placeholder="أي ملاحظات إضافية...")
-            
-            if st.button("💾 تسجيل الدفعة", key="btn_save_payment"):
-                if amount <= 0:
-                    st.error("❌ يرجى إدخال مبلغ صحيح")
-                else:
-                    success, message = record_payment(selected_player_pay, amount, payment_method, payment_date.strftime("%Y-%m-%d"), notes, st.session_state.username)
-                    if success:
-                        st.success(f"✅ {message}")
-                        st.rerun()
+            else:
+                selected_player_pay = st.selectbox("اختر اللاعب", players, key="pay_player")
+                summary = get_payment_summary(selected_player_pay)
+                
+                # عرض ملخص سريع
+                st.markdown("---")
+                st.caption("ملخص الاشتراك")
+                st.metric("الرسوم الشهرية", f"{summary['monthly_fee']:,.0f} جنيه")
+                st.metric("إجمالي المدفوع", f"{summary['total_paid']:,.0f} جنيه")
+                st.metric("المتبقي", f"{summary['remaining']:,.0f} جنيه")
+                st.markdown("---")
+                
+                amount = st.number_input("المبلغ (جنيه)", min_value=0.0, step=50.0, key="pay_amount")
+                payment_method = st.selectbox("طريقة الدفع", ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"], 
+                                            format_func=lambda x: {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}.get(x, x),
+                                            key="pay_method")
+                payment_date = st.date_input("تاريخ الدفع", value=date.today(), key="pay_date")
+                notes = st.text_area("ملاحظات", placeholder="أي ملاحظات إضافية...", key="pay_notes")
+                
+                if st.button("💾 تسجيل الدفعة", key="btn_save_payment"):
+                    if amount <= 0:
+                        st.error("❌ يرجى إدخال مبلغ صحيح")
                     else:
-                        st.error(f"❌ {message}")
+                        success, message = record_payment(selected_player_pay, amount, payment_method, payment_date.strftime("%Y-%m-%d"), notes, st.session_state.username)
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
         
         with col_right:
             st.markdown("### 📋 سجل المدفوعات")
@@ -1236,6 +1275,7 @@ def player_subscription_page():
 # =============================================================================
 def login_page():
     """صفحة تسجيل الدخول"""
+    # إخفاء الشريط الجانبي في صفحة تسجيل الدخول
     st.markdown("""
     <style>
     [data-testid="stSidebar"] { display: none !important; }
