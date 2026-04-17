@@ -18,11 +18,11 @@ st.set_page_config(
     page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # إخفاء الشريط الجانبي الافتراضي
 )
 
 # =============================================================================
-# CSS مخصص - إخفاء الهيدر بشكل آمن مع إظهار زر القائمة
+# CSS مخصص - إخفاء الهيدر والشريط الجانبي، وتنسيق شريط التنقل
 # =============================================================================
 st.markdown("""
 <style>
@@ -38,12 +38,17 @@ st.markdown("""
         background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
     }
     
-    /* إخفاء الشريط العلوي الافتراضي ولكن الإبقاء على زر القائمة */
-    header[data-testid="stHeader"] {
-        background: transparent !important;
+    /* إخفاء الشريط الجانبي الافتراضي */
+    [data-testid="stSidebar"] {
+        display: none !important;
     }
     
-    /* إخفاء العناصر غير المرغوب فيها */
+    /* إخفاء الهيدر العلوي الافتراضي */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    
+    /* إخفاء عناصر Streamlit غير المرغوب فيها */
     .stDeployButton,
     .stActionButton,
     #MainMenu,
@@ -54,23 +59,46 @@ st.markdown("""
         display: none !important;
     }
     
-    /* تنسيق زر القائمة الجانبية (الهامبرغر) */
-    button[kind="header"] {
-        background: white !important;
-        border-radius: 12px !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
-        width: 45px !important;
-        height: 45px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        border: none !important;
-        color: #1a5f3f !important;
-        margin: 10px !important;
+    /* شريط التنقل العلوي المخصص */
+    .nav-bar {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 10px;
+        padding: 15px 20px;
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        border-radius: 50px;
+        margin: 20px 0;
+        border: 1px solid rgba(255,255,255,0.2);
     }
     
-    button[kind="header"]:hover {
-        background: #f0f0f0 !important;
+    .nav-button {
+        background: transparent;
+        color: white;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-radius: 30px;
+        padding: 10px 25px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-block;
+    }
+    
+    .nav-button:hover {
+        background: white;
+        color: #1a5f3f !important;
+        border-color: white;
+        transform: translateY(-2px);
+    }
+    
+    .nav-button.active {
+        background: white;
+        color: #1a5f3f !important;
+        border-color: white;
+        box-shadow: 0 4px 15px rgba(255,255,255,0.3);
     }
     
     /* حاوية تسجيل الدخول */
@@ -168,21 +196,6 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background: white !important;
         color: #1a5f3f !important;
-    }
-    
-    /* تنسيق الشريط الجانبي */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(135deg, #0d3321 0%, #1a5f3f 100%);
-    }
-    [data-testid="stSidebar"] * {
-        color: white !important;
-    }
-    [data-testid="stSidebar"] button {
-        background: rgba(255,255,255,0.1) !important;
-        color: white !important;
-    }
-    [data-testid="stSidebar"] button:hover {
-        background: rgba(255,255,255,0.2) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -623,70 +636,71 @@ def navigate_to(page: str):
     st.rerun()
 
 # =============================================================================
-# الشريط الجانبي - نظام التنقل
+# شريط التنقل العلوي (Navigation Bar)
 # =============================================================================
-def sidebar():
-    """الشريط الجانبي مع نظام التنقل"""
-    with st.sidebar:
-        # الشعار
-        st.markdown("""
-        <div style="text-align: center; padding: 20px 0;">
-            <div style="font-size: 60px;">⚽</div>
-            <h2 style="color: white; margin: 10px 0; font-size: 22px;">الكوتش أكاديمي</h2>
-            <p style="color: rgba(255,255,255,0.7); font-size: 12px;">نظام إدارة الحضور والاشتراكات</p>
+def navigation_bar():
+    """عرض شريط التنقل الأفقي في أعلى الصفحة"""
+    # معلومات المستخدم
+    role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
+    role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
+    
+    # حاوية شريط التنقل
+    st.markdown(f"""
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: rgba(255,255,255,0.1); border-radius: 15px; margin-bottom: 20px;">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="font-size: 30px;">⚽</span>
+            <h2 style="color: white; margin: 0; font-size: 20px;">الكوتش أكاديمي</h2>
         </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        if st.session_state.logged_in:
-            # معلومات المستخدم
-            role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
-            role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
-            
-            st.markdown(f"""
-            <div style="text-align: center; padding: 12px; background: rgba(255,255,255,0.1); border-radius: 10px; margin-bottom: 15px;">
-                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 12px;">مرحباً</p>
-                <h4 style="color: white; margin: 5px 0; font-size: 15px;">{st.session_state.username}</h4>
-                <span style="background: {'#28a745' if st.session_state.role == 'coach' else '#17a2b8'}; color: white; padding: 2px 10px; border-radius: 10px; font-size: 11px;">
-                    {role_icon} {role_text}
-                </span>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.markdown("<p style='color: rgba(255,255,255,0.7); font-size: 14px; margin-bottom: 10px;'>📋 القائمة</p>", unsafe_allow_html=True)
-            
-            # أزرار التنقل للكابتن
-            if st.session_state.role == "coach":
-                pages = {
-                    "dashboard": "📊 لوحة التحكم",
-                    "attendance": "✅ تسجيل الحضور",
-                    "attendance_history": "📋 سجل الحضور",
-                    "subscriptions_payments": "💳 الاشتراكات والمدفوعات",  # دمج الصفحتين
-                    "players": "👥 إدارة اللاعبين"
-                }
-            else:
-                # أزرار التنقل للاعب
-                pages = {
-                    "dashboard": "📊 ملخصي",
-                    "my_attendance": "📋 سجل الحضور",
-                    "my_subscription": "💳 اشتراكي ومدفوعاتي"
-                }
-            
-            # عرض أزرار التنقل
-            for page_key, page_label in pages.items():
-                is_active = st.session_state.current_page == page_key
-                btn_type = "primary" if is_active else "secondary"
-                
-                if st.button(page_label, key=f"nav_{page_key}", use_container_width=True, type=btn_type):
-                    navigate_to(page_key)
-            
-            st.markdown("---")
-            
-            # زر تسجيل الخروج
-            if st.button("🚪 تسجيل الخروج", key="btn_logout", use_container_width=True):
-                logout()
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="color: white; font-size: 16px;">{role_icon} {st.session_state.username} ({role_text})</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # تعريف الصفحات حسب الدور
+    if st.session_state.role == "coach":
+        pages = {
+            "dashboard": "📊 لوحة التحكم",
+            "attendance": "✅ تسجيل الحضور",
+            "attendance_history": "📋 سجل الحضور",
+            "subscriptions_payments": "💳 الاشتراكات والمدفوعات",
+            "players": "👥 إدارة اللاعبين"
+        }
+    else:
+        pages = {
+            "dashboard": "📊 ملخصي",
+            "my_attendance": "📋 سجل الحضور",
+            "my_subscription": "💳 اشتراكي ومدفوعاتي"
+        }
+    
+    # إنشاء أزرار HTML مخصصة
+    nav_html = '<div class="nav-bar">'
+    for page_key, page_label in pages.items():
+        active_class = "active" if st.session_state.current_page == page_key else ""
+        nav_html += f'<a href="?page={page_key}" target="_self" class="nav-button {active_class}">{page_label}</a>'
+    
+    # إضافة زر تسجيل الخروج
+    nav_html += f'<a href="?logout=true" target="_self" class="nav-button" style="background: rgba(255,100,100,0.3); border-color: #ff6b6b;">🚪 تسجيل الخروج</a>'
+    nav_html += '</div>'
+    
+    st.markdown(nav_html, unsafe_allow_html=True)
+    
+    # معالجة التنقل عبر query parameters
+    query_params = st.query_params
+    if "page" in query_params:
+        page = query_params["page"]
+        if page in pages:
+            if st.session_state.current_page != page:
+                st.session_state.current_page = page
                 st.rerun()
+        else:
+            # إزالة المعامل غير الصحيح
+            st.query_params.clear()
+    
+    if "logout" in query_params:
+        logout()
+        st.query_params.clear()
+        st.rerun()
 
 # =============================================================================
 # صفحات الكابتن
@@ -1267,13 +1281,6 @@ def player_subscription_page():
 # =============================================================================
 def login_page():
     """صفحة تسجيل الدخول"""
-    # إخفاء الشريط الجانبي في صفحة تسجيل الدخول
-    st.markdown("""
-    <style>
-    [data-testid="stSidebar"] { display: none !important; }
-    </style>
-    """, unsafe_allow_html=True)
-    
     coach_exists = check_coach_exists()
     
     st.markdown("""
@@ -1360,12 +1367,13 @@ def main():
         init_sheets()
         st.session_state.sheets_initialized = True
     
-    if st.session_state.logged_in:
-        sidebar()
-    
     if not st.session_state.logged_in:
         login_page()
     else:
+        # عرض شريط التنقل العلوي
+        navigation_bar()
+        
+        # عرض الصفحة المطلوبة
         if st.session_state.role == "coach":
             if st.session_state.current_page == "dashboard":
                 coach_dashboard_page()
