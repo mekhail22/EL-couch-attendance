@@ -22,16 +22,27 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CSS مخصص - إخفاء الهيدر وتحسين التصميم
+# CSS مخصص - تحسين التصميم مع إظهار زر القائمة الجانبية
 # =============================================================================
 st.markdown("""
 <style>
-    /* إخفاء الهيدر العلوي */
-    header[data-testid="stHeader"] { display: none !important; }
+    /* إخفاء الهيدر العلوي فقط مع الإبقاء على زر القائمة */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+    }
     .stDeployButton { display: none !important; }
     #MainMenu { visibility: hidden !important; }
-    .stApp > header { display: none !important; }
-    button[kind="header"] { display: none !important; }
+    
+    /* إظهار زر الهامبرغر بشكل واضح */
+    button[kind="header"] {
+        background: rgba(255,255,255,0.2) !important;
+        border-radius: 8px !important;
+        color: white !important;
+        margin: 5px !important;
+    }
+    button[kind="header"]:hover {
+        background: rgba(255,255,255,0.3) !important;
+    }
     
     /* الخطوط */
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
@@ -619,8 +630,7 @@ def sidebar():
                     "dashboard": "📊 لوحة التحكم",
                     "attendance": "✅ تسجيل الحضور",
                     "attendance_history": "📋 سجل الحضور",
-                    "subscriptions": "💳 الاشتراكات",
-                    "payments": "💰 المدفوعات",
+                    "subscriptions_payments": "💳 الاشتراكات والمدفوعات",  # دمج الصفحتين
                     "players": "👥 إدارة اللاعبين"
                 }
             else:
@@ -628,8 +638,7 @@ def sidebar():
                 pages = {
                     "dashboard": "📊 ملخصي",
                     "my_attendance": "📋 سجل الحضور",
-                    "my_subscription": "💳 اشتراكي",
-                    "my_payments": "💰 مدفوعاتي"
+                    "my_subscription": "💳 اشتراكي ومدفوعاتي"
                 }
             
             # عرض أزرار التنقل
@@ -721,6 +730,28 @@ def coach_attendance_page():
     attendance_date = st.date_input("📅 تاريخ التسجيل", value=date.today())
     st.markdown("---")
     
+    # --- أزرار الحضور والغياب الجماعي ---
+    col_action1, col_action2 = st.columns(2)
+    with col_action1:
+        if st.button("✅ تسجيل حضور جميع اللاعبين", use_container_width=True):
+            success, message = record_multiple_attendance(players, "Present", st.session_state.username)
+            if success:
+                st.success(f"✅ {message}")
+                st.rerun()
+            else:
+                st.error(f"❌ {message}")
+    
+    with col_action2:
+        if st.button("❌ تسجيل غياب جميع اللاعبين", use_container_width=True):
+            success, message = record_multiple_attendance(players, "Absent", st.session_state.username)
+            if success:
+                st.success(f"✅ {message}")
+                st.rerun()
+            else:
+                st.error(f"❌ {message}")
+    
+    st.markdown("---")
+    
     st.markdown("### ✅ اللاعبون الحاضرون")
     present_players = st.multiselect("اختر اللاعبين الحاضرين", players, key="present_select")
     
@@ -729,6 +760,7 @@ def coach_attendance_page():
             success, message = record_multiple_attendance(present_players, "Present", st.session_state.username)
             if success:
                 st.success(f"✅ {message}")
+                st.rerun()
             else:
                 st.error(f"❌ {message}")
         else:
@@ -745,6 +777,7 @@ def coach_attendance_page():
             success, message = record_multiple_attendance(absent_players, "Absent", st.session_state.username)
             if success:
                 st.success(f"✅ {message}")
+                st.rerun()
             else:
                 st.error(f"❌ {message}")
         else:
@@ -767,6 +800,7 @@ def coach_attendance_page():
             success, message = record_attendance(single_player, single_status, st.session_state.username)
             if success:
                 st.success(f"✅ {message}")
+                st.rerun()
             else:
                 st.error(f"❌ {message}")
 
@@ -828,11 +862,13 @@ def coach_attendance_history_page():
         df_stats = df_stats.sort_values("نسبة الغياب (%)", ascending=False)
         st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-def coach_subscriptions_page():
-    st.markdown("# 💳 إدارة الاشتراكات")
+def coach_subscriptions_payments_page():
+    """صفحة موحدة للاشتراكات والمدفوعات"""
+    st.markdown("# 💳 الاشتراكات والمدفوعات")
     
-    tab1, tab2 = st.tabs(["📋 عرض الاشتراكات", "➕ إضافة/تعديل اشتراك"])
+    tab1, tab2, tab3 = st.tabs(["📋 عرض الاشتراكات", "➕ إضافة/تعديل اشتراك", "💰 تسجيل دفعة وسجل المدفوعات"])
     
+    # --- التبويب 1: عرض الاشتراكات ---
     with tab1:
         subscriptions = get_all_subscriptions()
         if subscriptions:
@@ -849,6 +885,7 @@ def coach_subscriptions_page():
         else:
             st.info("لا توجد اشتراكات مسجلة")
     
+    # --- التبويب 2: إضافة/تعديل اشتراك ---
     with tab2:
         st.markdown("### ➕ إضافة أو تعديل اشتراك")
         
@@ -904,71 +941,65 @@ def coach_subscriptions_page():
                 st.success(f"✅ {message}")
             else:
                 st.error(f"❌ {message}")
-
-def coach_payments_page():
-    st.markdown("# 💰 إدارة المدفوعات")
     
-    tab1, tab2 = st.tabs(["📋 سجل المدفوعات", "➕ تسجيل دفعة جديدة"])
-    
-    with tab1:
-        payments = get_all_payments()
-        if payments:
-            df = pd.DataFrame(payments)
-            df = df.rename(columns={"player_name": "اللاعب", "amount": "المبلغ", "payment_method": "طريقة الدفع", "payment_date": "تاريخ الدفع", "notes": "ملاحظات", "recorded_by": "سجل بواسطة"})
+    # --- التبويب 3: تسجيل دفعة وسجل المدفوعات ---
+    with tab3:
+        col_left, col_right = st.columns([1, 2])
+        
+        with col_left:
+            st.markdown("### ➕ تسجيل دفعة جديدة")
             
-            payment_methods = {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}
-            df["طريقة الدفع"] = df["طريقة الدفع"].apply(lambda x: payment_methods.get(x, x))
+            users = get_all_users()
+            players = [u.get("username", "").strip() for u in users if u.get("role", "").strip() == "player"]
             
-            st.dataframe(df.sort_values("تاريخ الدفع", ascending=False), use_container_width=True, hide_index=True)
+            if not players:
+                st.warning("⚠️ لا يوجد لاعبين مسجلين")
+                return
             
-            total = df["المبلغ"].sum()
-            st.markdown(f"### 💵 إجمالي المدفوعات: **{total:,.0f} جنيه**")
-        else:
-            st.info("لا توجد مدفوعات مسجلة")
-    
-    with tab2:
-        st.markdown("### ➕ تسجيل دفعة جديدة")
-        
-        users = get_all_users()
-        players = [u.get("username", "").strip() for u in users if u.get("role", "").strip() == "player"]
-        
-        if not players:
-            st.warning("⚠️ لا يوجد لاعبين مسجلين")
-            return
-        
-        selected_player = st.selectbox("اختر اللاعب", players, key="pay_player")
-        summary = get_payment_summary(selected_player)
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
+            selected_player_pay = st.selectbox("اختر اللاعب", players, key="pay_player")
+            summary = get_payment_summary(selected_player_pay)
+            
+            # عرض ملخص سريع
+            st.markdown("---")
+            st.caption("ملخص الاشتراك")
             st.metric("الرسوم الشهرية", f"{summary['monthly_fee']:,.0f} جنيه")
-        with col2:
             st.metric("إجمالي المدفوع", f"{summary['total_paid']:,.0f} جنيه")
-        with col3:
             st.metric("المتبقي", f"{summary['remaining']:,.0f} جنيه")
-        
-        st.markdown("---")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
+            st.markdown("---")
+            
             amount = st.number_input("المبلغ (جنيه)", min_value=0.0, step=50.0)
-        
-        with col2:
-            payment_method = st.selectbox("طريقة الدفع", ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"], format_func=lambda x: {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}.get(x, x))
-        
-        payment_date = st.date_input("تاريخ الدفع", value=date.today())
-        notes = st.text_area("ملاحظات", placeholder="أي ملاحظات إضافية...")
-        
-        if st.button("💾 تسجيل الدفعة", key="btn_save_payment"):
-            if amount <= 0:
-                st.error("❌ يرجى إدخال مبلغ صحيح")
-            else:
-                success, message = record_payment(selected_player, amount, payment_method, payment_date.strftime("%Y-%m-%d"), notes, st.session_state.username)
-                if success:
-                    st.success(f"✅ {message}")
+            payment_method = st.selectbox("طريقة الدفع", ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"], 
+                                        format_func=lambda x: {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}.get(x, x))
+            payment_date = st.date_input("تاريخ الدفع", value=date.today())
+            notes = st.text_area("ملاحظات", placeholder="أي ملاحظات إضافية...")
+            
+            if st.button("💾 تسجيل الدفعة", key="btn_save_payment"):
+                if amount <= 0:
+                    st.error("❌ يرجى إدخال مبلغ صحيح")
                 else:
-                    st.error(f"❌ {message}")
+                    success, message = record_payment(selected_player_pay, amount, payment_method, payment_date.strftime("%Y-%m-%d"), notes, st.session_state.username)
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+        
+        with col_right:
+            st.markdown("### 📋 سجل المدفوعات")
+            payments = get_all_payments()
+            if payments:
+                df = pd.DataFrame(payments)
+                df = df.rename(columns={"player_name": "اللاعب", "amount": "المبلغ", "payment_method": "طريقة الدفع", "payment_date": "تاريخ الدفع", "notes": "ملاحظات", "recorded_by": "سجل بواسطة"})
+                
+                payment_methods = {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}
+                df["طريقة الدفع"] = df["طريقة الدفع"].apply(lambda x: payment_methods.get(x, x))
+                
+                st.dataframe(df.sort_values("تاريخ الدفع", ascending=False), use_container_width=True, hide_index=True)
+                
+                total = df["المبلغ"].sum()
+                st.markdown(f"### 💵 إجمالي المدفوعات: **{total:,.0f} جنيه**")
+            else:
+                st.info("لا توجد مدفوعات مسجلة")
 
 def coach_players_page():
     st.markdown("# 👥 إدارة اللاعبين")
@@ -1065,7 +1096,7 @@ def player_dashboard_page():
     
     st.markdown("---")
     
-    st.markdown("## 💳 بيانات الاشتراك")
+    st.markdown("## 💳 بيانات الاشتراك والمدفوعات")
     
     subscription = get_player_subscription(username)
     payment_summary = get_payment_summary(username)
@@ -1089,6 +1120,17 @@ def player_dashboard_page():
         st.markdown("---")
         st.write(f"**تاريخ البدء:** {subscription.get('start_date', '-')}")
         st.write(f"**تاريخ الانتهاء:** {subscription.get('end_date', '-')}")
+        
+        # عرض آخر 5 مدفوعات
+        payments = get_player_payments(username)
+        if payments:
+            st.markdown("### 📋 آخر المدفوعات")
+            df = pd.DataFrame(payments[-5:])
+            df = df.rename(columns={"amount": "المبلغ", "payment_method": "طريقة الدفع", "payment_date": "تاريخ الدفع"})
+            df["طريقة الدفع"] = df["طريقة الدفع"].apply(
+                lambda x: {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}.get(x, x)
+            )
+            st.dataframe(df[["تاريخ الدفع", "المبلغ", "طريقة الدفع"]], use_container_width=True, hide_index=True)
     else:
         st.info("ℹ️ لم يتم تسجيل اشتراك لك بعد. تواصل مع الكابتن للتفعيل.")
 
@@ -1116,10 +1158,13 @@ def player_attendance_page():
         st.info("لا توجد سجلات حضور مسجلة لك بعد")
 
 def player_subscription_page():
-    st.markdown("# 💳 اشتراكي")
+    """صفحة موحدة للاعب لعرض الاشتراك والمدفوعات معًا"""
+    st.markdown("# 💳 اشتراكي ومدفوعاتي")
     
     username = st.session_state.username
     subscription = get_player_subscription(username)
+    payments = get_player_payments(username)
+    summary = get_payment_summary(username)
     
     if subscription:
         st.markdown("### 📋 تفاصيل الاشتراك")
@@ -1161,42 +1206,30 @@ def player_subscription_page():
                 st.warning(f"⚠️ اشتراكك على وشك الانتهاء! متبقي {(end_date - date.today()).days} أيام.")
         except:
             pass
+        
+        st.markdown("---")
+        st.markdown("### 💰 ملخص المدفوعات")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("الرسوم الشهرية", f"{summary['monthly_fee']:,.0f} جنيه")
+        with col2:
+            st.metric("إجمالي المدفوع", f"{summary['total_paid']:,.0f} جنيه")
+        with col3:
+            st.metric("المتبقي", f"{summary['remaining']:,.0f} جنيه")
+        
+        st.markdown("### 📋 سجل المدفوعات")
+        if payments:
+            df = pd.DataFrame(payments)
+            df = df.rename(columns={"amount": "المبلغ", "payment_method": "طريقة الدفع", "payment_date": "تاريخ الدفع", "notes": "ملاحظات"})
+            
+            payment_methods = {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}
+            df["طريقة الدفع"] = df["طريقة الدفع"].apply(lambda x: payment_methods.get(x, x))
+            
+            st.dataframe(df.sort_values("تاريخ الدفع", ascending=False), use_container_width=True, hide_index=True)
+        else:
+            st.info("لا توجد مدفوعات مسجلة لك بعد")
     else:
         st.info("ℹ️ لم يتم تسجيل اشتراك لك بعد. تواصل مع الكابتن للتفعيل.")
-
-def player_payments_page():
-    st.markdown("# 💰 سجل المدفوعات")
-    
-    username = st.session_state.username
-    payments = get_player_payments(username)
-    
-    summary = get_payment_summary(username)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("الرسوم الشهرية", f"{summary['monthly_fee']:,.0f} جنيه")
-    
-    with col2:
-        st.metric("إجمالي المدفوع", f"{summary['total_paid']:,.0f} جنيه")
-    
-    with col3:
-        st.metric("المتبقي", f"{summary['remaining']:,.0f} جنيه")
-    
-    st.markdown("---")
-    
-    st.markdown("### 📋 تفاصيل المدفوعات")
-    
-    if payments:
-        df = pd.DataFrame(payments)
-        df = df.rename(columns={"amount": "المبلغ", "payment_method": "طريقة الدفع", "payment_date": "تاريخ الدفع", "notes": "ملاحظات"})
-        
-        payment_methods = {"Cash": "💵 نقدي", "InstaPay": "📱 إنستا باي", "Vodafone Cash": "📲 فودافون كاش", "Bank Transfer": "🏦 تحويل بنكي", "Other": "📝 أخرى"}
-        df["طريقة الدفع"] = df["طريقة الدفع"].apply(lambda x: payment_methods.get(x, x))
-        
-        st.dataframe(df.sort_values("تاريخ الدفع", ascending=False), use_container_width=True, hide_index=True)
-    else:
-        st.info("لا توجد مدفوعات مسجلة لك بعد")
 
 # =============================================================================
 # صفحة تسجيل الدخول
@@ -1290,6 +1323,11 @@ def login_page():
 def main():
     init_session()
     
+    # محاولة تهيئة sheets عند بدء التشغيل
+    if "sheets_initialized" not in st.session_state:
+        init_sheets()
+        st.session_state.sheets_initialized = True
+    
     if st.session_state.logged_in:
         sidebar()
     
@@ -1303,10 +1341,8 @@ def main():
                 coach_attendance_page()
             elif st.session_state.current_page == "attendance_history":
                 coach_attendance_history_page()
-            elif st.session_state.current_page == "subscriptions":
-                coach_subscriptions_page()
-            elif st.session_state.current_page == "payments":
-                coach_payments_page()
+            elif st.session_state.current_page == "subscriptions_payments":
+                coach_subscriptions_payments_page()
             elif st.session_state.current_page == "players":
                 coach_players_page()
             else:
@@ -1318,8 +1354,6 @@ def main():
                 player_attendance_page()
             elif st.session_state.current_page == "my_subscription":
                 player_subscription_page()
-            elif st.session_state.current_page == "my_payments":
-                player_payments_page()
             else:
                 player_dashboard_page()
 
