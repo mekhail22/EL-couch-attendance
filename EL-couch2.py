@@ -22,21 +22,30 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CSS مخصص
+# CSS مخصص - إخفاء الهيدر وتحسين التصميم
 # =============================================================================
 st.markdown("""
 <style>
+    /* إخفاء الهيدر العلوي */
     header[data-testid="stHeader"] { display: none !important; }
     .stDeployButton { display: none !important; }
     #MainMenu { visibility: hidden !important; }
     .stApp > header { display: none !important; }
     button[kind="header"] { display: none !important; }
     
+    /* الخطوط */
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
     * { font-family: 'Cairo', sans-serif !important; }
-    .main { direction: rtl; }
-    .stApp { background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%); }
     
+    /* الاتجاه */
+    .main { direction: rtl; }
+    
+    /* الخلفية */
+    .stApp {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+    }
+    
+    /* حاوية تسجيل الدخول */
     .login-container {
         max-width: 450px;
         margin: 50px auto;
@@ -45,27 +54,22 @@ st.markdown("""
         border-radius: 20px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
     }
+    
     .logo-container { text-align: center; margin-bottom: 30px; }
     .logo { font-size: 80px; margin-bottom: 10px; }
     .title { color: #1a5f3f; font-size: 32px; font-weight: 700; text-align: center; margin-bottom: 5px; }
     .subtitle { color: #666; font-size: 16px; text-align: center; margin-bottom: 30px; }
     
-    .welcome-box {
-        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
-        color: white;
-        padding: 20px;
+    /* البطاقات */
+    .card {
+        background: white;
         border-radius: 15px;
+        padding: 25px;
         margin-bottom: 20px;
-        text-align: center;
-    }
-    .info-box {
-        background: #e3f2fd;
-        border-right: 4px solid #2196f3;
-        padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 20px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
     }
     
+    /* بطاقة الإحصائيات */
     .stat-card {
         background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
         color: white;
@@ -76,12 +80,66 @@ st.markdown("""
     .stat-number { font-size: 36px; font-weight: 700; margin-bottom: 5px; }
     .stat-label { font-size: 14px; opacity: 0.9; }
     
-    .card {
-        background: white;
+    /* صندوق الترحيب */
+    .welcome-box {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+        color: white;
+        padding: 20px;
         border-radius: 15px;
-        padding: 25px;
         margin-bottom: 20px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        text-align: center;
+    }
+    
+    /* صندوق المعلومات */
+    .info-box {
+        background: #e3f2fd;
+        border-right: 4px solid #2196f3;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+    
+    /* تحسين الأزرار */
+    .stButton > button {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 30px;
+        font-size: 16px;
+        font-weight: 600;
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(26, 95, 63, 0.4);
+    }
+    
+    /* تحسين حقول الإدخال */
+    .stTextInput > div > div > input {
+        border-radius: 10px;
+        border: 2px solid #e0e0e0;
+        padding: 12px 15px;
+        text-align: right;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: #1a5f3f;
+    }
+    
+    /* تحسين التبويبات */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(255,255,255,0.1);
+        border-radius: 10px 10px 0 0;
+        padding: 10px 20px;
+        color: white;
+    }
+    .stTabs [aria-selected="true"] {
+        background: white !important;
+        color: #1a5f3f !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -200,7 +258,7 @@ def get_payments_sheet():
     return None
 
 # =============================================================================
-# دوال المستخدمين - مع إزالة المسافات
+# دوال المستخدمين
 # =============================================================================
 def get_all_users():
     """جلب جميع المستخدمين"""
@@ -208,7 +266,6 @@ def get_all_users():
     if sheet:
         try:
             data = sheet.get_all_records()
-            # إزالة المسافات من البيانات
             cleaned_data = []
             for row in data:
                 cleaned_row = {}
@@ -220,12 +277,11 @@ def get_all_users():
                 cleaned_data.append(cleaned_row)
             return cleaned_data
         except Exception as e:
-            st.error(f"خطأ في قراءة المستخدمين: {e}")
             return []
     return []
 
 def get_user(username: str):
-    """جلب مستخدم محدد - مع إزالة المسافات"""
+    """جلب مستخدم محدد"""
     users = get_all_users()
     username_clean = username.strip() if username else ""
     
@@ -247,11 +303,9 @@ def add_user(username: str, password: str, role: str = "player"):
     """إضافة مستخدم جديد"""
     sheet = get_users_sheet()
     if sheet:
-        # إزالة المسافات
         username = username.strip() if username else ""
         password = password.strip() if password else ""
         
-        # التحقق من عدم التكرار
         existing = get_user(username)
         if existing:
             return False, "اسم المستخدم موجود بالفعل"
@@ -494,25 +548,13 @@ def init_session():
         st.session_state.role = None
     if "current_page" not in st.session_state:
         st.session_state.current_page = "dashboard"
-    if "debug_mode" not in st.session_state:
-        st.session_state.debug_mode = False
 
 def login(username: str, password: str):
-    """تسجيل الدخول - مع إزالة المسافات"""
+    """تسجيل الدخول"""
     username = username.strip() if username else ""
     password = password.strip() if password else ""
     
     user = get_user(username)
-    
-    # DEBUG: عرض البيانات للتشخيص
-    if st.session_state.debug_mode:
-        st.write("--- DEBUG ---")
-        st.write(f"الاسم المدخل: '{username}'")
-        st.write(f"كلمة المرور المدخلة: '{password}'")
-        st.write(f"المستخدم الموجود: {user}")
-        if user:
-            st.write(f"كلمة المرور المحفوظة: '{user.get('password', '')}'")
-        st.write("--- END DEBUG ---")
     
     if user:
         stored_password = user.get("password", "").strip()
@@ -538,35 +580,40 @@ def navigate_to(page: str):
     st.rerun()
 
 # =============================================================================
-# الشريط الجانبي
+# الشريط الجانبي - نظام التنقل
 # =============================================================================
 def sidebar():
+    """الشريط الجانبي مع نظام التنقل"""
     with st.sidebar:
+        # الشعار
         st.markdown("""
         <div style="text-align: center; padding: 20px 0;">
             <div style="font-size: 60px;">⚽</div>
-            <h2 style="color: white; margin: 10px 0; font-size: 24px;">الكوتش أكاديمي</h2>
+            <h2 style="color: white; margin: 10px 0; font-size: 22px;">الكوتش أكاديمي</h2>
+            <p style="color: rgba(255,255,255,0.7); font-size: 12px;">نظام إدارة الحضور والاشتراكات</p>
         </div>
         """, unsafe_allow_html=True)
         
         st.markdown("---")
         
         if st.session_state.logged_in:
+            # معلومات المستخدم
             role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
             role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
             
             st.markdown(f"""
-            <div style="text-align: center; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 10px; margin-bottom: 20px;">
-                <p style="color: rgba(255,255,255,0.7); margin: 0; font-size: 12px;">مرحباً</p>
-                <h4 style="color: white; margin: 5px 0; font-size: 16px;">{st.session_state.username}</h4>
-                <span style="background: {'#28a745' if st.session_state.role == 'coach' else '#17a2b8'}; color: white; padding: 3px 12px; border-radius: 15px; font-size: 11px;">
+            <div style="text-align: center; padding: 12px; background: rgba(255,255,255,0.1); border-radius: 10px; margin-bottom: 15px;">
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 12px;">مرحباً</p>
+                <h4 style="color: white; margin: 5px 0; font-size: 15px;">{st.session_state.username}</h4>
+                <span style="background: {'#28a745' if st.session_state.role == 'coach' else '#17a2b8'}; color: white; padding: 2px 10px; border-radius: 10px; font-size: 11px;">
                     {role_icon} {role_text}
                 </span>
             </div>
             """, unsafe_allow_html=True)
             
-            st.markdown("### 📋 القائمة")
+            st.markdown("<p style='color: rgba(255,255,255,0.7); font-size: 14px; margin-bottom: 10px;'>📋 القائمة</p>", unsafe_allow_html=True)
             
+            # أزرار التنقل للكابتن
             if st.session_state.role == "coach":
                 pages = {
                     "dashboard": "📊 لوحة التحكم",
@@ -577,6 +624,7 @@ def sidebar():
                     "players": "👥 إدارة اللاعبين"
                 }
             else:
+                # أزرار التنقل للاعب
                 pages = {
                     "dashboard": "📊 ملخصي",
                     "my_attendance": "📋 سجل الحضور",
@@ -584,6 +632,7 @@ def sidebar():
                     "my_payments": "💰 مدفوعاتي"
                 }
             
+            # عرض أزرار التنقل
             for page_key, page_label in pages.items():
                 is_active = st.session_state.current_page == page_key
                 btn_type = "primary" if is_active else "secondary"
@@ -593,6 +642,7 @@ def sidebar():
             
             st.markdown("---")
             
+            # زر تسجيل الخروج
             if st.button("🚪 تسجيل الخروج", key="btn_logout", use_container_width=True):
                 logout()
                 st.rerun()
@@ -1184,14 +1234,6 @@ def login_page():
             <p>👋 مرحباً! سيتم تسجيلك كـ <strong>لاعب</strong> تلقائياً.</p>
         </div>
         """, unsafe_allow_html=True)
-    
-    # زر Debug Mode
-    col_debug = st.columns([1])[0]
-    with col_debug:
-        if st.checkbox("🔧 وضع التشخيص (Debug)", key="debug_toggle"):
-            st.session_state.debug_mode = True
-        else:
-            st.session_state.debug_mode = False
     
     tab1, tab2 = st.tabs(["🔐 تسجيل الدخول", "📝 تسجيل حساب جديد"])
     
