@@ -1,3 +1,8 @@
+"""
+نظام الكوتش أكاديمي - إدارة الحضور والاشتراكات الموسمية
+=====================================================
+"""
+
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -20,9 +25,10 @@ st.set_page_config(
 )
 
 # =============================================================================
-# دوال مساعدة للتخزين المؤقت وإعادة المحاولة (لحل مشكلة 429)
+# دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
 def retry_on_quota(func, max_retries=3, delay=2):
+    """إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota"""
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -37,8 +43,9 @@ def retry_on_quota(func, max_retries=3, delay=2):
     return wrapper
 
 # =============================================================================
-# إعداد Google Sheets
+# إعداد Google Sheets مع تحسين إدارة الاتصال
 # =============================================================================
+@st.cache_resource
 def get_google_sheets_client():
     try:
         credentials_dict = {
@@ -80,6 +87,19 @@ def get_workbook():
             st.error(f"❌ خطأ في فتح ملف Sheets: {str(e)}")
     return None
 
+@st.cache_resource
+def get_worksheet(sheet_name):
+    workbook = get_workbook()
+    if workbook:
+        try:
+            return workbook.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            return None
+        except Exception as e:
+            st.error(f"❌ خطأ في الوصول إلى ورقة {sheet_name}: {str(e)}")
+            return None
+    return None
+
 def init_sheets():
     workbook = get_workbook()
     if not workbook:
@@ -100,57 +120,38 @@ def init_sheets():
                 sheet = workbook.add_worksheet(title=sheet_name, rows=1000, cols=20)
                 sheet.append_row(headers)
         
+        # مسح ذاكرة التخزين المؤقت للأوراق بعد الإنشاء
+        get_worksheet.clear()
         return True
     except Exception as e:
         st.error(f"❌ خطأ في تهيئة Sheets: {str(e)}")
         return False
 
 # =============================================================================
-# دوال قراءة البيانات مع التخزين المؤقت
+# دوال قراءة البيانات مع التخزين المؤقت وإعادة المحاولة
 # =============================================================================
+@retry_on_quota
+def _get_all_records_safe(sheet_name):
+    sheet = get_worksheet(sheet_name)
+    if sheet:
+        return sheet.get_all_records()
+    return []
+
 @st.cache_data(ttl=60)
 def get_users_sheet_data():
-    workbook = get_workbook()
-    if workbook:
-        try:
-            sheet = workbook.worksheet("Users")
-            return sheet.get_all_records()
-        except:
-            return []
-    return []
+    return _get_all_records_safe("Users")
 
 @st.cache_data(ttl=60)
 def get_attendance_sheet_data():
-    workbook = get_workbook()
-    if workbook:
-        try:
-            sheet = workbook.worksheet("Attendance")
-            return sheet.get_all_records()
-        except:
-            return []
-    return []
+    return _get_all_records_safe("Attendance")
 
 @st.cache_data(ttl=60)
 def get_subscriptions_sheet_data():
-    workbook = get_workbook()
-    if workbook:
-        try:
-            sheet = workbook.worksheet("Subscriptions")
-            return sheet.get_all_records()
-        except:
-            return []
-    return []
+    return _get_all_records_safe("Subscriptions")
 
 @st.cache_data(ttl=60)
 def get_payments_sheet_data():
-    workbook = get_workbook()
-    if workbook:
-        try:
-            sheet = workbook.worksheet("Payments")
-            return sheet.get_all_records()
-        except:
-            return []
-    return []
+    return _get_all_records_safe("Payments")
 
 def clean_records(records):
     cleaned = []
@@ -177,13 +178,16 @@ def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
-# دوال الكتابة (مع إعادة المحاولة)
+# دوال الكتابة (مع إعادة المحاولة وتحسين الأمان)
 # =============================================================================
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
-    workbook = get_workbook()
-    if workbook:
-        sheet = workbook.worksheet(sheet_name)
+    sheet = get_worksheet(sheet_name)
+    if sheet is None:
+        # محاولة إعادة تهيئة الأوراق
+        init_sheets()
+        sheet = get_worksheet(sheet_name)
+    if sheet:
         sheet.append_row(row_data)
         st.cache_data.clear()
         return True
@@ -191,9 +195,11 @@ def append_row_to_sheet(sheet_name, row_data):
 
 @retry_on_quota
 def update_cell_in_sheet(sheet_name, row, col, value):
-    workbook = get_workbook()
-    if workbook:
-        sheet = workbook.worksheet(sheet_name)
+    sheet = get_worksheet(sheet_name)
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet(sheet_name)
+    if sheet:
         sheet.update_cell(row, col, value)
         st.cache_data.clear()
         return True
@@ -304,7 +310,14 @@ def add_or_update_subscription(player_name: str, season_fee: float, start_date: 
     workbook = get_workbook()
     if not workbook:
         return False, "خطأ في الاتصال بقاعدة البيانات"
-    sheet = workbook.worksheet("Subscriptions")
+    
+    sheet = get_worksheet("Subscriptions")
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet("Subscriptions")
+        if sheet is None:
+            return False, "تعذر الوصول إلى ورقة الاشتراكات"
+    
     updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         all_records = get_all_subscriptions()
@@ -313,6 +326,7 @@ def add_or_update_subscription(player_name: str, season_fee: float, start_date: 
             if record.get("player_name", "").strip() == player_name.strip():
                 row_idx = idx
                 break
+        
         if row_idx:
             update_cell_in_sheet("Subscriptions", row_idx, 2, season_fee)
             update_cell_in_sheet("Subscriptions", row_idx, 3, start_date)
@@ -396,9 +410,9 @@ def navigate_to(page: str):
     st.rerun()
 
 # =============================================================================
-# دالة عرض الشعار
+# دالة عرض الشعار (تستخدم فقط في صفحة تسجيل الدخول)
 # =============================================================================
-def get_logo_html(width=50):
+def get_logo_html(width=150):
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
         try:
@@ -411,7 +425,7 @@ def get_logo_html(width=50):
     return f'<span style="font-size:{width}px;">⚽</span>'
 
 # =============================================================================
-# CSS مخصص (مع تحسين وضوح النصوص وتكبير الشعار)
+# CSS مخصص
 # =============================================================================
 st.markdown("""
 <style>
@@ -536,14 +550,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# شريط التنقل (مع شعار أكبر)
+# شريط التنقل (بدون شعار)
 # =============================================================================
 def navigation_bar():
-    col_logo, col_title, col_user = st.columns([0.7, 2, 1])
-    with col_logo:
-        st.markdown(get_logo_html(70), unsafe_allow_html=True)
+    col_title, col_user = st.columns([3, 1])
     with col_title:
-        st.markdown('<h2 style="color:white; margin:0; font-size:26px;">الكوتش أكاديمي</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 style="color:white; margin:0; font-size:26px; text-align:right; padding-right:20px;">⚽ الكوتش أكاديمي</h2>', unsafe_allow_html=True)
     with col_user:
         role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
         role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
@@ -1034,7 +1046,7 @@ def player_subscription_page():
         st.info("ℹ️ لم يتم تسجيل اشتراك لك بعد. تواصل مع الكابتن للتفعيل.")
 
 # =============================================================================
-# صفحة تسجيل الدخول مع شعار في المنتصف ونصوص واضحة
+# صفحة تسجيل الدخول (مع شعار في المنتصف)
 # =============================================================================
 def login_page():
     coach_exists = check_coach_exists()
