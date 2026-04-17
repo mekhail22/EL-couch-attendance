@@ -22,189 +22,170 @@ st.set_page_config(
 )
 
 # =============================================================================
-# CSS أساسي (يطبق في جميع الصفحات)
+# CSS مخصص - إخفاء الهيدر بشكل آمن مع إظهار زر القائمة
 # =============================================================================
-def apply_base_styles():
-    st.markdown("""
-    <style>
-        /* الخطوط */
-        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
-        * { font-family: 'Cairo', sans-serif !important; }
-        
-        /* الاتجاه */
-        .main { direction: rtl; }
-        
-        /* الخلفية */
-        .stApp {
-            background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
-        }
-        
-        /* حاوية تسجيل الدخول */
-        .login-container {
-            max-width: 450px;
-            margin: 50px auto;
-            padding: 40px;
-            background: rgba(255, 255, 255, 0.98);
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-        }
-        
-        .logo-container { text-align: center; margin-bottom: 30px; }
-        .logo { font-size: 80px; margin-bottom: 10px; }
-        .title { color: #1a5f3f; font-size: 32px; font-weight: 700; text-align: center; margin-bottom: 5px; }
-        .subtitle { color: #666; font-size: 16px; text-align: center; margin-bottom: 30px; }
-        
-        /* البطاقات */
-        .card {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-        
-        /* بطاقة الإحصائيات */
-        .stat-card {
-            background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
-            color: white;
-            border-radius: 15px;
-            padding: 20px;
-            text-align: center;
-        }
-        .stat-number { font-size: 36px; font-weight: 700; margin-bottom: 5px; }
-        .stat-label { font-size: 14px; opacity: 0.9; }
-        
-        /* صندوق الترحيب */
-        .welcome-box {
-            background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 15px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        
-        /* صندوق المعلومات */
-        .info-box {
-            background: #e3f2fd;
-            border-right: 4px solid #2196f3;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        
-        /* تحسين الأزرار */
-        .stButton > button {
-            background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 12px 30px;
-            font-size: 16px;
-            font-weight: 600;
-            width: 100%;
-            transition: all 0.3s ease;
-        }
-        
-        .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(26, 95, 63, 0.4);
-        }
-        
-        /* تحسين حقول الإدخال */
-        .stTextInput > div > div > input {
-            border-radius: 10px;
-            border: 2px solid #e0e0e0;
-            padding: 12px 15px;
-            text-align: right;
-        }
-        
-        .stTextInput > div > div > input:focus {
-            border-color: #1a5f3f;
-        }
-        
-        /* تحسين التبويبات */
-        .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-        .stTabs [data-baseweb="tab"] {
-            background: rgba(255,255,255,0.1);
-            border-radius: 10px 10px 0 0;
-            padding: 10px 20px;
-            color: white;
-        }
-        .stTabs [aria-selected="true"] {
-            background: white !important;
-            color: #1a5f3f !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-def apply_logged_in_styles():
-    """CSS خاص بالصفحات بعد تسجيل الدخول (إخفاء الهيدر وإظهار زر القائمة)"""
-    st.markdown("""
-    <style>
-        /* إخفاء كامل شريط Streamlit العلوي */
-        header[data-testid="stHeader"] {
-            display: none !important;
-            visibility: hidden !important;
-            height: 0 !important;
-        }
-        
-        /* إخفاء أي عناصر أخرى في الشريط العلوي */
-        .stDeployButton,
-        .stActionButton,
-        #MainMenu,
-        footer,
-        div[data-testid="stToolbar"],
-        div[data-testid="stDecoration"],
-        div[data-testid="stStatusWidget"],
-        .stApp > header,
-        .stApp > div:first-child > div:first-child {
-            display: none !important;
-        }
-        
-        /* إخفاء النص الغريب الموجود على زر القائمة */
-        button[kind="header"] span,
-        button[data-testid="baseButton-header"] span {
-            display: none !important;
-        }
-        
-        /* إعادة تصميم زر القائمة الجانبية ليكون ظاهراً وأنيقاً */
-        button[kind="header"],
-        button[data-testid="baseButton-header"] {
-            position: fixed !important;
-            top: 15px !important;
-            left: 15px !important;
-            z-index: 999 !important;
-            background: white !important;
-            border-radius: 12px !important;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
-            width: 45px !important;
-            height: 45px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            border: none !important;
-            color: #1a5f3f !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-        }
-        
-        /* إضافة أيقونة الهامبرغر يدوياً */
-        button[kind="header"]::before {
-            content: "☰" !important;
-            font-size: 28px !important;
-            font-weight: bold !important;
-            color: #1a5f3f !important;
-            display: block !important;
-            visibility: visible !important;
-        }
-        
-        /* تأكيد ظهور الشريط الجانبي عند الحاجة */
-        [data-testid="stSidebar"] {
-            visibility: visible !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("""
+<style>
+    /* الخطوط */
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
+    * { font-family: 'Cairo', sans-serif !important; }
+    
+    /* الاتجاه */
+    .main { direction: rtl; }
+    
+    /* الخلفية */
+    .stApp {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+    }
+    
+    /* إخفاء الشريط العلوي الافتراضي ولكن الإبقاء على زر القائمة */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+    }
+    
+    /* إخفاء العناصر غير المرغوب فيها */
+    .stDeployButton,
+    .stActionButton,
+    #MainMenu,
+    footer,
+    div[data-testid="stToolbar"],
+    div[data-testid="stDecoration"],
+    div[data-testid="stStatusWidget"] {
+        display: none !important;
+    }
+    
+    /* تنسيق زر القائمة الجانبية (الهامبرغر) */
+    button[kind="header"] {
+        background: white !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+        width: 45px !important;
+        height: 45px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border: none !important;
+        color: #1a5f3f !important;
+        margin: 10px !important;
+    }
+    
+    button[kind="header"]:hover {
+        background: #f0f0f0 !important;
+    }
+    
+    /* حاوية تسجيل الدخول */
+    .login-container {
+        max-width: 450px;
+        margin: 50px auto;
+        padding: 40px;
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    }
+    
+    .logo-container { text-align: center; margin-bottom: 30px; }
+    .logo { font-size: 80px; margin-bottom: 10px; }
+    .title { color: #1a5f3f; font-size: 32px; font-weight: 700; text-align: center; margin-bottom: 5px; }
+    .subtitle { color: #666; font-size: 16px; text-align: center; margin-bottom: 30px; }
+    
+    /* البطاقات */
+    .card {
+        background: white;
+        border-radius: 15px;
+        padding: 25px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* بطاقة الإحصائيات */
+    .stat-card {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+        color: white;
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stat-number { font-size: 36px; font-weight: 700; margin-bottom: 5px; }
+    .stat-label { font-size: 14px; opacity: 0.9; }
+    
+    /* صندوق الترحيب */
+    .welcome-box {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 15px;
+        margin-bottom: 20px;
+        text-align: center;
+    }
+    
+    /* صندوق المعلومات */
+    .info-box {
+        background: #e3f2fd;
+        border-right: 4px solid #2196f3;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+    
+    /* تحسين الأزرار */
+    .stButton > button {
+        background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 30px;
+        font-size: 16px;
+        font-weight: 600;
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(26, 95, 63, 0.4);
+    }
+    
+    /* تحسين حقول الإدخال */
+    .stTextInput > div > div > input {
+        border-radius: 10px;
+        border: 2px solid #e0e0e0;
+        padding: 12px 15px;
+        text-align: right;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: #1a5f3f;
+    }
+    
+    /* تحسين التبويبات */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        background: rgba(255,255,255,0.1);
+        border-radius: 10px 10px 0 0;
+        padding: 10px 20px;
+        color: white;
+    }
+    .stTabs [aria-selected="true"] {
+        background: white !important;
+        color: #1a5f3f !important;
+    }
+    
+    /* تنسيق الشريط الجانبي */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(135deg, #0d3321 0%, #1a5f3f 100%);
+    }
+    [data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    [data-testid="stSidebar"] button {
+        background: rgba(255,255,255,0.1) !important;
+        color: white !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background: rgba(255,255,255,0.2) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # =============================================================================
 # إعداد Google Sheets
@@ -338,7 +319,7 @@ def get_all_users():
                         cleaned_row[key] = value
                 cleaned_data.append(cleaned_row)
             return cleaned_data
-        except Exception as e:
+        except:
             return []
     return []
 
@@ -681,7 +662,7 @@ def sidebar():
                     "dashboard": "📊 لوحة التحكم",
                     "attendance": "✅ تسجيل الحضور",
                     "attendance_history": "📋 سجل الحضور",
-                    "subscriptions_payments": "💳 الاشتراكات والمدفوعات",
+                    "subscriptions_payments": "💳 الاشتراكات والمدفوعات",  # دمج الصفحتين
                     "players": "👥 إدارة اللاعبين"
                 }
             else:
@@ -1290,8 +1271,6 @@ def login_page():
     st.markdown("""
     <style>
     [data-testid="stSidebar"] { display: none !important; }
-    /* إظهار محتوى الصفحة بشكل طبيعي */
-    .stApp { background: linear-gradient(135deg, #1a5f3f 0%, #0d3321 100%); }
     </style>
     """, unsafe_allow_html=True)
     
@@ -1376,17 +1355,12 @@ def login_page():
 def main():
     init_session()
     
-    # تطبيق التنسيقات الأساسية (الخطوط، الألوان، البطاقات)
-    apply_base_styles()
-    
     # محاولة تهيئة sheets عند بدء التشغيل
     if "sheets_initialized" not in st.session_state:
         init_sheets()
         st.session_state.sheets_initialized = True
     
-    # إذا كان المستخدم مسجلاً للدخول، نطبق CSS خاص بإخفاء الهيدر وإظهار زر القائمة
     if st.session_state.logged_in:
-        apply_logged_in_styles()
         sidebar()
     
     if not st.session_state.logged_in:
