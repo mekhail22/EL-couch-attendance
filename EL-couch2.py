@@ -1,30 +1,3 @@
-"""
-الكوتش أكاديمي - نظام إدارة الحضور والاشتراكات الموسمية
-=====================================================
-تطبيق Streamlit لإدارة الحضور والاشتراكات لأكاديمية كرة القدم
-
-**إعدادات secrets.toml المطلوبة:**
------------------------------------
-[google]
-spreadsheet_id = "YOUR_SPREADSHEET_ID"
-
-[google.service_account]
-type = "service_account"
-project_id = "..."
-private_key_id = "..."
-private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-client_email = "...@....iam.gserviceaccount.com"
-client_id = "..."
-auth_uri = "https://accounts.google.com/o/oauth2/auth"
-token_uri = "https://oauth2.googleapis.com/token"
-auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
-client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
-universe_domain = "googleapis.com"
-
-[app]
-finance_password = "123456"   # كلمة المرور للتقارير المالية
-"""
-
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -36,21 +9,11 @@ import base64
 import time
 from functools import wraps
 
-# =============================================================================
 # إعدادات الصفحة
-# =============================================================================
-st.set_page_config(
-    page_title="الكوتش أكاديمي",
-    page_icon="⚽",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+st.set_page_config(page_title="الكوتش أكاديمي", page_icon="⚽", layout="wide", initial_sidebar_state="collapsed")
 
-# =============================================================================
-# دوال مساعدة للتخزين المؤقت وإعادة المحاولة
-# =============================================================================
+# ---------- دوال مساعدة للتخزين المؤقت وإعادة المحاولة ----------
 def retry_on_quota(func, max_retries=3, delay=2):
-    """إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota"""
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -64,9 +27,7 @@ def retry_on_quota(func, max_retries=3, delay=2):
         return None
     return wrapper
 
-# =============================================================================
-# دوال Google Sheets مع التخزين المؤقت
-# =============================================================================
+# ---------- إعداد Google Sheets مع التخزين المؤقت ----------
 def get_google_sheets_client():
     try:
         credentials_dict = {
@@ -86,12 +47,8 @@ def get_google_sheets_client():
     except Exception as e:
         st.error(f"❌ خطأ في قراءة الإعدادات: {str(e)}")
         return None, None
-    
     try:
-        credentials = Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        )
+        credentials = Credentials.from_service_account_info(credentials_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         client = gspread.authorize(credentials)
         return client, spreadsheet_id
     except Exception as e:
@@ -129,16 +86,13 @@ def init_sheets():
         st.error(f"❌ خطأ في تهيئة Sheets: {str(e)}")
         return False
 
-# =============================================================================
-# دوال قراءة البيانات مع التخزين المؤقت (لتقليل استدعاءات API)
-# =============================================================================
+# ---------- دوال قراءة البيانات مع التخزين المؤقت (لتقليل استدعاءات API) ----------
 @st.cache_data(ttl=60)
 def get_users_sheet_data():
     workbook = get_workbook()
     if workbook:
         try:
-            sheet = workbook.worksheet("Users")
-            return sheet.get_all_records()
+            return workbook.worksheet("Users").get_all_records()
         except:
             return []
     return []
@@ -148,8 +102,7 @@ def get_attendance_sheet_data():
     workbook = get_workbook()
     if workbook:
         try:
-            sheet = workbook.worksheet("Attendance")
-            return sheet.get_all_records()
+            return workbook.worksheet("Attendance").get_all_records()
         except:
             return []
     return []
@@ -159,8 +112,7 @@ def get_subscriptions_sheet_data():
     workbook = get_workbook()
     if workbook:
         try:
-            sheet = workbook.worksheet("Subscriptions")
-            return sheet.get_all_records()
+            return workbook.worksheet("Subscriptions").get_all_records()
         except:
             return []
     return []
@@ -170,13 +122,11 @@ def get_payments_sheet_data():
     workbook = get_workbook()
     if workbook:
         try:
-            sheet = workbook.worksheet("Payments")
-            return sheet.get_all_records()
+            return workbook.worksheet("Payments").get_all_records()
         except:
             return []
     return []
 
-# دوال مساعدة لتنظيف البيانات
 def clean_records(records):
     cleaned = []
     for row in records:
@@ -201,16 +151,13 @@ def get_all_subscriptions():
 def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
-# =============================================================================
-# دوال الكتابة (مع إعادة المحاولة)
-# =============================================================================
+# ---------- دوال الكتابة (مع إعادة المحاولة) ----------
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
     workbook = get_workbook()
     if workbook:
         sheet = workbook.worksheet(sheet_name)
         sheet.append_row(row_data)
-        # مسح ذاكرة التخزين المؤقت بعد الكتابة
         st.cache_data.clear()
         return True
     return False
@@ -225,9 +172,7 @@ def update_cell_in_sheet(sheet_name, row, col, value):
         return True
     return False
 
-# =============================================================================
-# دوال المستخدمين
-# =============================================================================
+# ---------- دوال المستخدمين ----------
 def get_user(username: str):
     users = get_all_users()
     username_clean = username.strip() if username else ""
@@ -246,11 +191,8 @@ def check_coach_exists():
 def add_user(username: str, password: str, role: str = "player"):
     username = username.strip() if username else ""
     password = password.strip() if password else ""
-    
-    existing = get_user(username)
-    if existing:
+    if get_user(username):
         return False, "اسم المستخدم موجود بالفعل"
-    
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if append_row_to_sheet("Users", [username, password, role, created_at]):
         return True, f"تم إضافة المستخدم بنجاح كـ {'كابتن' if role == 'coach' else 'لاعب'}"
@@ -270,19 +212,14 @@ def validate_triple_name(name: str) -> bool:
             return False
     return True
 
-# =============================================================================
-# دوال الحضور
-# =============================================================================
+# ---------- دوال الحضور ----------
 def record_attendance(player_name: str, status: str, recorded_by: str):
     today = datetime.now().strftime("%Y-%m-%d")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # التحقق من التسجيل المسبق
     records = get_all_attendance()
     for r in records:
         if r.get("player_name", "").strip() == player_name.strip() and r.get("date") == today:
             return False, "تم تسجيل الحضور مسبقاً لهذا اليوم"
-    
     if append_row_to_sheet("Attendance", [player_name.strip(), today, status, recorded_by.strip(), created_at]):
         return True, f"تم تسجيل {'الحضور' if status == 'Present' else 'الغياب'} بنجاح"
     return False, "خطأ في الاتصال بقاعدة البيانات"
@@ -322,9 +259,7 @@ def get_today_attendance():
     records = get_all_attendance()
     return [r for r in records if r.get("date") == today]
 
-# =============================================================================
-# دوال الاشتراكات الموسمية
-# =============================================================================
+# ---------- دوال الاشتراكات الموسمية ----------
 def get_player_subscription(player_name: str):
     records = get_all_subscriptions()
     for r in records:
@@ -338,7 +273,6 @@ def add_or_update_subscription(player_name: str, season_fee: float, start_date: 
         return False, "خطأ في الاتصال بقاعدة البيانات"
     sheet = workbook.worksheet("Subscriptions")
     updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     try:
         all_records = get_all_subscriptions()
         row_idx = None
@@ -346,7 +280,6 @@ def add_or_update_subscription(player_name: str, season_fee: float, start_date: 
             if record.get("player_name", "").strip() == player_name.strip():
                 row_idx = idx
                 break
-        
         if row_idx:
             update_cell_in_sheet("Subscriptions", row_idx, 2, season_fee)
             update_cell_in_sheet("Subscriptions", row_idx, 3, start_date)
@@ -360,9 +293,7 @@ def add_or_update_subscription(player_name: str, season_fee: float, start_date: 
     except Exception as e:
         return False, f"خطأ: {str(e)}"
 
-# =============================================================================
-# دوال المدفوعات
-# =============================================================================
+# ---------- دوال المدفوعات ----------
 def record_payment(player_name: str, amount: float, payment_method: str, payment_date: str, notes: str = "", recorded_by: str = ""):
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if append_row_to_sheet("Payments", [player_name.strip(), amount, payment_method, payment_date, notes, recorded_by.strip(), created_at]):
@@ -389,9 +320,7 @@ def get_payment_summary(player_name: str):
     remaining = max(0, season_fee - total_paid)
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": subscription.get("subscription_status", "Unknown")}
 
-# =============================================================================
-# تهيئة الجلسة
-# =============================================================================
+# ---------- تهيئة الجلسة ----------
 def init_session():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
@@ -413,7 +342,7 @@ def login(username: str, password: str):
         st.session_state.username = username
         st.session_state.role = user.get("role", "player").strip()
         st.session_state.current_page = "dashboard"
-        st.session_state.finance_authenticated = False  # إعادة تعيين المصادقة المالية
+        st.session_state.finance_authenticated = False
         return True, "تم تسجيل الدخول بنجاح"
     return False, "اسم المستخدم أو كلمة المرور غير صحيحة"
 
@@ -429,9 +358,7 @@ def navigate_to(page: str):
     st.session_state.current_page = page
     st.rerun()
 
-# =============================================================================
-# دالة عرض الشعار
-# =============================================================================
+# ---------- عرض الشعار ----------
 def get_logo_html(width=50):
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
@@ -444,9 +371,7 @@ def get_logo_html(width=50):
             pass
     return f'<span style="font-size:{width}px;">⚽</span>'
 
-# =============================================================================
-# CSS مخصص
-# =============================================================================
+# ---------- CSS مخصص ----------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
@@ -492,7 +417,11 @@ st.markdown("""
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
         text-align: center;
     }
-    .logo-login { margin-bottom: 20px; }
+    .logo-login {
+        margin-bottom: 20px;
+        display: flex;
+        justify-content: center;
+    }
     .title { color: #1a5f3f; font-size: 32px; font-weight: 700; margin-bottom: 5px; }
     .subtitle { color: #666; font-size: 16px; margin-bottom: 30px; }
     
@@ -554,9 +483,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# =============================================================================
-# شريط التنقل
-# =============================================================================
+# ---------- شريط التنقل ----------
 def navigation_bar():
     col_logo, col_title, col_user = st.columns([0.5, 2, 1])
     with col_logo:
@@ -598,9 +525,7 @@ def navigation_bar():
                 logout()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# =============================================================================
-# صفحة المصادقة المالية (تظهر فقط إذا لم يتم التحقق)
-# =============================================================================
+# ---------- صفحة المصادقة المالية ----------
 def finance_auth_wall():
     st.markdown("## 🔐 المصادقة المطلوبة")
     st.markdown("الرجاء إدخال كلمة المرور للوصول إلى التقارير المالية.")
@@ -614,76 +539,15 @@ def finance_auth_wall():
             st.error("❌ كلمة المرور غير صحيحة")
     st.stop()
 
-# =============================================================================
-# صفحة التقارير المالية (للكابتن فقط، محمية)
-# =============================================================================
-def coach_finance_reports_page():
-    if not st.session_state.get("finance_authenticated", False):
-        finance_auth_wall()
-        return
-    
-    st.markdown("# 📊 التقارير المالية")
-    st.markdown("### ملخص الاشتراكات الموسمية والمدفوعات")
-    
-    subs = get_all_subscriptions()
-    payments = get_all_payments()
-    
-    total_season_fee = sum(float(s.get("season_fee", 0)) for s in subs)
-    total_paid = sum(float(p.get("amount", 0)) for p in payments)
-    total_remaining = max(0, total_season_fee - total_paid)
-    collection_rate = (total_paid / total_season_fee * 100) if total_season_fee > 0 else 0
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_season_fee:,.0f}</div><div class="stat-label">💰 إجمالي المستحق</div></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_paid:,.0f}</div><div class="stat-label">💵 إجمالي المدفوع</div></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_remaining:,.0f}</div><div class="stat-label">📉 إجمالي المتبقي</div></div>', unsafe_allow_html=True)
-    with col4:
-        st.markdown(f'<div class="stat-card"><div class="stat-number">{collection_rate:.1f}%</div><div class="stat-label">📈 نسبة التحصيل</div></div>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    st.markdown("### 📋 تفاصيل اللاعبين")
-    
-    players_data = []
-    users = get_all_users()
-    player_names = [u["username"].strip() for u in users if u.get("role") == "player"]
-    
-    for name in player_names:
-        sub = get_player_subscription(name)
-        season_fee = float(sub.get("season_fee", 0)) if sub else 0
-        player_payments = [p for p in payments if p.get("player_name", "").strip() == name]
-        paid = sum(float(p.get("amount", 0)) for p in player_payments)
-        remaining = max(0, season_fee - paid)
-        status = sub.get("subscription_status", "—") if sub else "—"
-        players_data.append({
-            "اللاعب": name,
-            "قيمة الاشتراك": season_fee,
-            "المدفوع": paid,
-            "المتبقي": remaining,
-            "الحالة": "🟢 نشط" if status == "Active" else ("🔴 منتهي" if status == "Expired" else "🟡 معلق") if sub else "—"
-        })
-    
-    if players_data:
-        df = pd.DataFrame(players_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("لا يوجد لاعبين مسجلين.")
-
-# =============================================================================
-# باقي الصفحات (تم تعديل صفحة الاشتراكات لتعكس الموسمية)
-# =============================================================================
+# ---------- صفحات الكابتن ----------
 def coach_dashboard_page():
     st.markdown("# 📊 لوحة التحكم")
     st.markdown(f"مرحباً، **{st.session_state.username}** 👋")
     st.markdown("---")
-    
     users = get_all_users()
     players = [u for u in users if u.get("role") == "player"]
     attendance = get_all_attendance()
     today_attendance = get_today_attendance()
-    
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f'<div class="stat-card"><div class="stat-number">{len(players)}</div><div class="stat-label">👥 عدد اللاعبين</div></div>', unsafe_allow_html=True)
@@ -696,7 +560,6 @@ def coach_dashboard_page():
     with col4:
         not_recorded = len(players) - len(today_attendance)
         st.markdown(f'<div class="stat-card"><div class="stat-number">{max(0, not_recorded)}</div><div class="stat-label">⏳ لم يُسجل</div></div>', unsafe_allow_html=True)
-    
     st.markdown("---")
     st.markdown("### 📋 آخر سجلات الحضور")
     if attendance:
@@ -728,7 +591,6 @@ def coach_attendance_page():
             if success: st.success(msg); st.rerun()
             else: st.error(msg)
     st.markdown("---")
-    # بقية الكود كما هو (اختيار الحضور والغياب) مختصر هنا للتركيز على التغييرات المهمة
     st.markdown("### ✅ الحضور")
     present = st.multiselect("اختر الحاضرين", players, key="present")
     if st.button("تسجيل حضور المحددين"):
@@ -779,7 +641,6 @@ def coach_attendance_history_page():
 def coach_subscriptions_payments_page():
     st.markdown("# 💳 الاشتراكات والمدفوعات")
     tab1, tab2, tab3 = st.tabs(["📋 عرض الاشتراكات", "➕ إضافة/تعديل اشتراك ودفعة", "📊 سجل المدفوعات"])
-    
     with tab1:
         subs = get_all_subscriptions()
         if subs:
@@ -796,7 +657,6 @@ def coach_subscriptions_payments_page():
             st.dataframe(df[["اللاعب","قيمة الاشتراك","total_paid","remaining","بداية الموسم","نهاية الموسم","الحالة"]], use_container_width=True, hide_index=True)
         else:
             st.info("لا توجد اشتراكات")
-    
     with tab2:
         st.markdown("### ➕ إضافة/تعديل اشتراك (مع دفعة)")
         users = get_all_users()
@@ -836,7 +696,6 @@ def coach_subscriptions_payments_page():
                             st.warning(f"⚠️ تم حفظ الاشتراك لكن فشلت الدفعة: {p_msg}")
                     else:
                         st.error(f"❌ فشل حفظ الاشتراك: {s_msg}")
-    
     with tab3:
         payments = get_all_payments()
         if payments:
@@ -888,7 +747,53 @@ def coach_players_page():
             else:
                 st.write("لا يوجد اشتراك")
 
-# صفحات اللاعب (مختصرة، مع تعديل التسمية)
+def coach_finance_reports_page():
+    if not st.session_state.get("finance_authenticated", False):
+        finance_auth_wall()
+        return
+    st.markdown("# 📊 التقارير المالية")
+    st.markdown("### ملخص الاشتراكات الموسمية والمدفوعات")
+    subs = get_all_subscriptions()
+    payments = get_all_payments()
+    total_season_fee = sum(float(s.get("season_fee", 0)) for s in subs)
+    total_paid = sum(float(p.get("amount", 0)) for p in payments)
+    total_remaining = max(0, total_season_fee - total_paid)
+    collection_rate = (total_paid / total_season_fee * 100) if total_season_fee > 0 else 0
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_season_fee:,.0f}</div><div class="stat-label">💰 إجمالي المستحق</div></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_paid:,.0f}</div><div class="stat-label">💵 إجمالي المدفوع</div></div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_remaining:,.0f}</div><div class="stat-label">📉 إجمالي المتبقي</div></div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{collection_rate:.1f}%</div><div class="stat-label">📈 نسبة التحصيل</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 📋 تفاصيل اللاعبين")
+    users = get_all_users()
+    player_names = [u["username"].strip() for u in users if u.get("role") == "player"]
+    players_data = []
+    for name in player_names:
+        sub = get_player_subscription(name)
+        season_fee = float(sub.get("season_fee", 0)) if sub else 0
+        player_payments = [p for p in payments if p.get("player_name", "").strip() == name]
+        paid = sum(float(p.get("amount", 0)) for p in player_payments)
+        remaining = max(0, season_fee - paid)
+        status = sub.get("subscription_status", "—") if sub else "—"
+        players_data.append({
+            "اللاعب": name,
+            "قيمة الاشتراك": season_fee,
+            "المدفوع": paid,
+            "المتبقي": remaining,
+            "الحالة": "🟢 نشط" if status == "Active" else ("🔴 منتهي" if status == "Expired" else "🟡 معلق") if sub else "—"
+        })
+    if players_data:
+        df = pd.DataFrame(players_data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("لا يوجد لاعبين مسجلين.")
+
+# ---------- صفحات اللاعب ----------
 def player_dashboard_page():
     st.markdown("# 📊 ملخصي")
     st.markdown(f"مرحباً **{st.session_state.username}** 👋")
@@ -946,9 +851,7 @@ def player_subscription_page():
     else:
         st.info("لا يوجد اشتراك")
 
-# =============================================================================
-# صفحة تسجيل الدخول مع شعار في المنتصف
-# =============================================================================
+# ---------- صفحة تسجيل الدخول ----------
 def login_page():
     coach_exists = check_coach_exists()
     st.markdown('<div class="login-container">', unsafe_allow_html=True)
@@ -994,15 +897,12 @@ def login_page():
                     st.error(msg)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# =============================================================================
-# الدالة الرئيسية
-# =============================================================================
+# ---------- الدالة الرئيسية ----------
 def main():
     init_session()
     if "sheets_initialized" not in st.session_state:
         init_sheets()
         st.session_state.sheets_initialized = True
-    
     if not st.session_state.logged_in:
         login_page()
     else:
