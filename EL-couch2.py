@@ -3,6 +3,13 @@
 =====================================================
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
+
+المميزات:
+- تسجيل حضور وغياب اللاعبين (فردي/جماعي).
+- إدارة اشتراكات موسمية مع دفعات متعددة.
+- تقارير مالية محمية بكلمة مرور مع تصنيف حسب حالة الدفع.
+- إمكانية تعديل أو حذف الاشتراكات والمدفوعات المسجلة.
+- دعم كامل للغة العربية وواجهة جذابة.
 """
 
 import streamlit as st
@@ -27,7 +34,7 @@ st.set_page_config(
 # =============================================================================
 # دوال مساعدة للتخزين المؤقت وإعادة المحاولة (لحل مشكلة 429)
 # =============================================================================
-def retry_on_quota(func, max_retries=4, delay=2.5):
+def retry_on_quota(func, max_retries=5, delay=2.0):
     """
     إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) من Google Sheets.
     تزيد عدد المحاولات وفترة الانتظار لضمان استقرار الاتصال.
@@ -38,10 +45,12 @@ def retry_on_quota(func, max_retries=4, delay=2.5):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                if ("429" in str(e) or "APIError" in str(type(e))) and attempt < max_retries - 1:
+                # تحقق مما إذا كان الخطأ يتعلق بـ Quota (429)
+                if ("429" in str(e) or "Quota exceeded" in str(e)) and attempt < max_retries - 1:
                     # انتظار متزايد مع كل محاولة
                     time.sleep(delay * (attempt + 1))
                 else:
+                    # إذا كان خطأ آخر أو استنفدت المحاولات، أعد رميه
                     raise e
         return None
     return wrapper
@@ -357,16 +366,58 @@ def get_today_attendance():
 # دوال الاشتراكات والمدفوعات (ورقة Finance موحدة مع Payments منفصلة)
 # =============================================================================
 def get_player_finance(player_name: str):
+    """الحصول على السجل المالي للاعب من ورقة Finance."""
     records = get_all_finance()
     for r in records:
         if r.get("player_name", "").strip() == player_name.strip():
             return r
     return None
 
+def calculate_total_paid_from_payments(player_name: str) -> float:
+    """حساب إجمالي المدفوعات للاعب من ورقة Payments مباشرة."""
+    payments = get_all_payments()
+    total = 0.0
+    for p in payments:
+        if p.get("player_name", "").strip() == player_name.strip():
+            try:
+                total += float(p.get("amount", 0))
+            except:
+                pass
+    return total
+
+def sync_total_paid_in_finance(player_name: str):
+    """
+    تحديث قيمة total_paid في ورقة Finance بناءً على مجموع المدفوعات الفعلية في ورقة Payments.
+    """
+    finance = get_player_finance(player_name)
+    if not finance:
+        return
+    # حساب الإجمالي الصحيح
+    correct_total = calculate_total_paid_from_payments(player_name)
+    all_finance = get_all_finance()
+    row_idx = None
+    for idx, rec in enumerate(all_finance, start=2):
+        if rec.get("player_name", "").strip() == player_name.strip():
+            row_idx = idx
+            break
+    if row_idx:
+        update_cell_in_sheet("Finance", row_idx, 6, correct_total)
+        # تحديث last_payment_date بأحدث تاريخ دفعة
+        payments = get_player_payments(player_name)
+        if payments:
+            latest_date = max(p["payment_date"] for p in payments)
+            update_cell_in_sheet("Finance", row_idx, 7, latest_date)
+
+def get_player_payments(player_name: str):
+    """جلب جميع مدفوعات لاعب معين من ورقة Payments."""
+    records = get_all_payments()
+    return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
+
 def add_or_update_finance_record(player_name: str, season_fee: float, start_date: str, end_date: str, status: str,
                                  amount_paid: float = 0, payment_method: str = "", payment_date: str = "", notes: str = ""):
     """
-    إضافة أو تحديث سجل مالي للاعب. إذا تم توفير amount_paid > 0، يتم إضافتها إلى total_paid.
+    إضافة أو تحديث سجل مالي للاعب. إذا تم توفير amount_paid > 0، يتم تسجيل دفعة جديدة.
+    لا يتم تعديل total_paid مباشرة هنا، بل نعتمد على sync لاحقاً أو نحدثه عبر record_payment.
     """
     workbook = get_workbook()
     if not workbook:
@@ -384,36 +435,39 @@ def add_or_update_finance_record(player_name: str, season_fee: float, start_date
 
     # البحث عن سجل موجود للاعب
     row_idx = None
-    current_total_paid = 0
     for idx, record in enumerate(all_records, start=2):
         if record.get("player_name", "").strip() == player_name.strip():
             row_idx = idx
-            current_total_paid = float(record.get("total_paid", 0))
             break
 
-    new_total_paid = current_total_paid + amount_paid
-    last_payment_date = payment_date if amount_paid > 0 else (all_records[row_idx-2].get("last_payment_date") if row_idx else "")
-
     if row_idx:
-        # تحديث السجل الموجود
+        # تحديث السجل الموجود (بدون تغيير total_paid هنا)
         update_cell_in_sheet("Finance", row_idx, 2, season_fee)
         update_cell_in_sheet("Finance", row_idx, 3, start_date)
         update_cell_in_sheet("Finance", row_idx, 4, end_date)
         update_cell_in_sheet("Finance", row_idx, 5, status)
-        update_cell_in_sheet("Finance", row_idx, 6, new_total_paid)
-        update_cell_in_sheet("Finance", row_idx, 7, last_payment_date)
         update_cell_in_sheet("Finance", row_idx, 8, updated_at)
-        return True, "تم تحديث البيانات المالية بنجاح"
+        action = "تحديث"
     else:
-        # إنشاء سجل جديد
-        row_data = [player_name.strip(), season_fee, start_date, end_date, status, amount_paid, payment_date, updated_at]
-        if append_row_to_sheet("Finance", row_data):
-            return True, "تم إضافة البيانات المالية بنجاح"
-    return False, "فشل في حفظ البيانات"
+        # إنشاء سجل جديد مع total_paid = 0 (سيتم تحديثه لاحقاً)
+        row_data = [player_name.strip(), season_fee, start_date, end_date, status, 0, "", updated_at]
+        if not append_row_to_sheet("Finance", row_data):
+            return False, "فشل في إضافة البيانات المالية"
+        action = "إضافة"
+
+    # إذا كان هناك دفعة جديدة، نسجلها في Payments
+    if amount_paid > 0:
+        if not record_payment(player_name, amount_paid, payment_method, payment_date, notes, st.session_state.username):
+            return False, "تم حفظ الاشتراك ولكن فشل تسجيل الدفعة"
+        # مزامنة total_paid بعد تسجيل الدفعة
+        sync_total_paid_in_finance(player_name)
+
+    return True, f"تم {action} الاشتراك بنجاح"
 
 def delete_finance_record(player_name: str):
     """
     حذف سجل الاشتراك للاعب من ورقة Finance.
+    (لا نحذف المدفوعات المرتبطة تلقائياً، يمكن حذفها يدوياً).
     """
     all_finance = get_all_finance()
     row_idx = None
@@ -432,19 +486,7 @@ def record_payment(player_name: str, amount: float, payment_method: str, payment
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if append_row_to_sheet("Payments", [player_name.strip(), amount, payment_method, payment_date, notes, recorded_by.strip(), created_at]):
         # تحديث إجمالي المدفوع في ورقة Finance
-        finance = get_player_finance(player_name)
-        if finance:
-            current_total = float(finance.get("total_paid", 0))
-            new_total = current_total + amount
-            all_finance = get_all_finance()
-            row_idx = None
-            for idx, rec in enumerate(all_finance, start=2):
-                if rec.get("player_name", "").strip() == player_name.strip():
-                    row_idx = idx
-                    break
-            if row_idx:
-                update_cell_in_sheet("Finance", row_idx, 6, new_total)
-                update_cell_in_sheet("Finance", row_idx, 7, payment_date)
+        sync_total_paid_in_finance(player_name)
         return True, "تم تسجيل الدفعة بنجاح"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
@@ -461,41 +503,20 @@ def update_payment_record(payment_row_index: int, player_name: str, old_amount: 
         update_cell_in_sheet("Payments", payment_row_index, 4, payment_date)
         update_cell_in_sheet("Payments", payment_row_index, 5, notes)
 
-        # تحديث إجمالي المدفوع في Finance
-        finance = get_player_finance(player_name)
-        if finance:
-            current_total = float(finance.get("total_paid", 0))
-            new_total = current_total - old_amount + new_amount
-            all_finance = get_all_finance()
-            row_idx = None
-            for idx, rec in enumerate(all_finance, start=2):
-                if rec.get("player_name", "").strip() == player_name.strip():
-                    row_idx = idx
-                    break
-            if row_idx:
-                update_cell_in_sheet("Finance", row_idx, 6, new_total)
+        # مزامنة total_paid في Finance
+        sync_total_paid_in_finance(player_name)
         return True, "تم تحديث الدفعة بنجاح"
     return False, "خطأ في تحديث الدفعة"
 
-def delete_payment_record(payment_row_index: int, player_name: str, amount: float):
+def delete_payment_record(payment_row_index: int, player_name: str):
     """
     حذف دفعة وتحديث total_paid.
     """
     sheet = get_worksheet("Payments")
     if sheet:
         if delete_row_from_sheet("Payments", payment_row_index):
-            finance = get_player_finance(player_name)
-            if finance:
-                current_total = float(finance.get("total_paid", 0))
-                new_total = max(0, current_total - amount)
-                all_finance = get_all_finance()
-                row_idx = None
-                for idx, rec in enumerate(all_finance, start=2):
-                    if rec.get("player_name", "").strip() == player_name.strip():
-                        row_idx = idx
-                        break
-                if row_idx:
-                    update_cell_in_sheet("Finance", row_idx, 6, new_total)
+            # مزامنة total_paid بعد الحذف
+            sync_total_paid_in_finance(player_name)
             return True, "تم حذف الدفعة بنجاح"
     return False, "خطأ في حذف الدفعة"
 
@@ -507,10 +528,8 @@ def get_payment_summary(player_name: str):
         season_fee = float(finance.get("season_fee", 0))
     except:
         season_fee = 0
-    try:
-        total_paid = float(finance.get("total_paid", 0))
-    except:
-        total_paid = 0
+    # نستخدم القيمة المحسوبة من Payments للتأكد من الدقة
+    total_paid = calculate_total_paid_from_payments(player_name)
     remaining = max(0, season_fee - total_paid)
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
 
@@ -789,14 +808,18 @@ def coach_attendance_page():
     with col1:
         if st.button("✅ تسجيل حضور الجميع", use_container_width=True):
             success, msg = record_multiple_attendance(players, "Present", st.session_state.username)
-            if success: st.success(msg); st.rerun()
-            else: st.error(msg)
+            if success:
+                st.success(msg)
+                st.toast("✅ تم تسجيل الحضور لجميع اللاعبين!", icon="✅")
+                st.rerun()
+            else:
+                st.error(msg)
     with col2:
         if st.button("❌ تسجيل غياب الجميع", use_container_width=True):
             success, msg = record_multiple_attendance(players, "Absent", st.session_state.username)
             if success:
                 st.success(msg)
-                st.success("✅ تم تسجيل الغياب لجميع اللاعبين بنجاح!")
+                st.toast("✅ تم تسجيل الغياب لجميع اللاعبين!", icon="✅")
                 st.rerun()
             else:
                 st.error(msg)
@@ -806,8 +829,12 @@ def coach_attendance_page():
     if st.button("تسجيل حضور المحددين"):
         if present:
             success, msg = record_multiple_attendance(present, "Present", st.session_state.username)
-            if success: st.success(msg); st.rerun()
-            else: st.error(msg)
+            if success:
+                st.success(msg)
+                st.toast(f"✅ تم تسجيل حضور {len(present)} لاعب!", icon="✅")
+                st.rerun()
+            else:
+                st.error(msg)
     st.markdown("### ❌ الغياب")
     remaining = [p for p in players if p not in present]
     absent = st.multiselect("اختر الغائبين", remaining, key="absent")
@@ -816,7 +843,7 @@ def coach_attendance_page():
             success, msg = record_multiple_attendance(absent, "Absent", st.session_state.username)
             if success:
                 st.success(msg)
-                st.success(f"✅ تم تسجيل غياب {len(absent)} لاعب بنجاح!")
+                st.toast(f"✅ تم تسجيل غياب {len(absent)} لاعب!", icon="✅")
                 st.rerun()
             else:
                 st.error(msg)
@@ -832,10 +859,8 @@ def coach_attendance_page():
         if st.button("تسجيل"):
             success, msg = record_attendance(sp, ss, st.session_state.username)
             if success:
-                if ss == "Absent":
-                    st.success(f"✅ تم تسجيل غياب {sp} بنجاح!")
-                else:
-                    st.success(msg)
+                st.success(msg)
+                st.toast(f"✅ تم تسجيل {'الحضور' if ss=='Present' else 'الغياب'} لـ {sp}!", icon="✅")
                 st.rerun()
             else:
                 st.error(msg)
@@ -892,8 +917,8 @@ def coach_subscriptions_payments_page():
                 else:
                     success, msg = add_or_update_finance_record(sel, fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), status, amt, method, pdate.strftime("%Y-%m-%d"), notes)
                     if success:
-                        record_payment(sel, amt, method, pdate.strftime("%Y-%m-%d"), notes, st.session_state.username)
                         st.success("✅ تم حفظ الاشتراك والدفعة بنجاح!")
+                        st.toast("✅ اشتراك جديد مع دفعة!", icon="💳")
                         st.rerun()
                     else:
                         st.error(msg)
@@ -928,6 +953,7 @@ def coach_subscriptions_payments_page():
                         success, msg = add_or_update_finance_record(sel, fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), status, 0)
                         if success:
                             st.success("✅ تم تحديث الاشتراك بنجاح!")
+                            st.toast("✅ تم تحديث الاشتراك!", icon="✏️")
                             st.rerun()
                         else:
                             st.error(msg)
@@ -935,6 +961,7 @@ def coach_subscriptions_payments_page():
                     if st.button("🗑️ حذف الاشتراك", key="btn_delete_finance"):
                         if delete_finance_record(sel):
                             st.success("✅ تم حذف الاشتراك بنجاح!")
+                            st.toast("✅ تم حذف الاشتراك!", icon="🗑️")
                             st.rerun()
                         else:
                             st.error("❌ فشل حذف الاشتراك")
@@ -968,14 +995,16 @@ def coach_subscriptions_payments_page():
                         success, msg = update_payment_record(row_num, row['player_name'], float(row['amount']), new_amt, new_method, new_date.strftime("%Y-%m-%d"), new_notes)
                         if success:
                             st.success("✅ تم تحديث الدفعة بنجاح!")
+                            st.toast("✅ تم تحديث الدفعة!", icon="💰")
                             st.rerun()
                         else:
                             st.error(msg)
                 with col2:
                     if st.button("🗑️ حذف الدفعة", key="btn_delete_payment"):
-                        success, msg = delete_payment_record(row_num, row['player_name'], float(row['amount']))
+                        success, msg = delete_payment_record(row_num, row['player_name'])
                         if success:
                             st.success("✅ تم حذف الدفعة بنجاح!")
+                            st.toast("✅ تم حذف الدفعة!", icon="🗑️")
                             st.rerun()
                         else:
                             st.error(msg)
@@ -1043,7 +1072,8 @@ def coach_finance_reports_page():
 
     df = pd.DataFrame(finance)
     df["season_fee"] = df["season_fee"].astype(float)
-    df["total_paid"] = df["total_paid"].astype(float)
+    # نعيد حساب total_paid من Payments للتأكد من الدقة
+    df["total_paid"] = df["player_name"].apply(lambda name: calculate_total_paid_from_payments(name))
     df["remaining"] = df["season_fee"] - df["total_paid"]
     df["payment_status"] = df["remaining"].apply(lambda x: "مدفوع بالكامل" if x <= 0 else ("مدفوع جزئيًا" if x < df["season_fee"] else "غير مدفوع"))
 
@@ -1131,8 +1161,12 @@ def login_page():
         if st.button("دخول"):
             if username and password:
                 success, msg = login(username, password)
-                if success: st.success(msg); st.rerun()
-                else: st.error(msg)
+                if success:
+                    st.success(msg)
+                    st.toast("✅ تم تسجيل الدخول بنجاح!", icon="🔓")
+                    st.rerun()
+                else:
+                    st.error(msg)
     with tab2:
         new_user = st.text_input("الاسم الثلاثي", key="reg_user")
         new_pass = st.text_input("كلمة المرور", type="password", key="reg_pass")
@@ -1145,8 +1179,12 @@ def login_page():
             else:
                 role = "coach" if not coach_exists else "player"
                 success, msg = add_user(new_user, new_pass, role)
-                if success: st.success(msg); st.info("يمكنك الآن تسجيل الدخول")
-                else: st.error(msg)
+                if success:
+                    st.success(msg)
+                    st.toast("✅ تم إنشاء الحساب بنجاح!", icon="🎉")
+                    st.info("يمكنك الآن تسجيل الدخول")
+                else:
+                    st.error(msg)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =============================================================================
