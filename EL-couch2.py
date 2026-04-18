@@ -28,10 +28,7 @@ st.set_page_config(
 # دوال مساعدة للتخزين المؤقت وإعادة المحاولة (لحل مشكلة 429)
 # =============================================================================
 def retry_on_quota(func, max_retries=5, delay=2.0):
-    """
-    إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) من Google Sheets.
-    تزيد عدد المحاولات وفترة الانتظار لضمان استقرار الاتصال.
-    """
+    """إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) من Google Sheets."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -767,6 +764,8 @@ def coach_attendance_page():
                 st.rerun()
             else:
                 st.error(msg)
+        else:
+            st.warning("⚠️ يرجى اختيار لاعب واحد على الأقل")
     st.markdown("### ❌ الغياب")
     remaining = [p for p in players if p not in present]
     absent = st.multiselect("اختر الغائبين", remaining, key="absent")
@@ -1078,7 +1077,7 @@ def player_subscription_page():
         st.write(f"الحالة: {'🟢 نشط' if sub.get('subscription_status')=='Active' else '🔴 غير نشط'}")
 
 # =============================================================================
-# صفحة تسجيل الدخول (نصوص واضحة وألوان محسّنة)
+# صفحة تسجيل الدخول (نصوص واضحة والرسالة تظهر فقط عند التسجيل)
 # =============================================================================
 def login_page():
     coach_exists = check_coach_exists()
@@ -1089,8 +1088,10 @@ def login_page():
     if not coach_exists:
         st.markdown('<div class="welcome-box"><h3>👋 مرحباً بك!</h3><p>سيتم تسجيلك كـ <strong>كابتن</strong>.</p></div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="info-box"><p>👋 سيتم تسجيلك كـ <strong>لاعب</strong>.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="welcome-box"><h3>👋 مرحباً بك!</h3><p>قم بتسجيل الدخول أو إنشاء حساب جديد.</p></div>', unsafe_allow_html=True)
+
     tab1, tab2 = st.tabs(["🔐 تسجيل الدخول", "📝 تسجيل حساب جديد"])
+
     with tab1:
         username = st.text_input("اسم المستخدم (الاسم الثلاثي)", key="login_user")
         password = st.text_input("كلمة المرور", type="password", key="login_pass")
@@ -1105,7 +1106,14 @@ def login_page():
                     st.error(msg)
             else:
                 st.error("يرجى إدخال اسم المستخدم وكلمة المرور")
+
     with tab2:
+        # الرسالة تظهر هنا فقط
+        if coach_exists:
+            st.markdown('<div class="info-box"><p>👋 سيتم تسجيلك كـ <strong>لاعب</strong>.</p></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="info-box"><p>👋 سيتم تسجيلك كـ <strong>كابتن</strong>.</p></div>', unsafe_allow_html=True)
+
         new_user = st.text_input("الاسم الثلاثي", key="reg_user")
         new_pass = st.text_input("كلمة المرور", type="password", key="reg_pass")
         confirm = st.text_input("تأكيد كلمة المرور", type="password", key="reg_confirm")
@@ -1127,6 +1135,7 @@ def login_page():
                     st.info("يمكنك الآن تسجيل الدخول")
                 else:
                     st.error(msg)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 # =============================================================================
