@@ -4,6 +4,7 @@
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
 الألوان: غامقة وفاخرة (أخضر زمردي، أزرق داكن، أسود مخملي).
+تمت إضافة ميزات منع تكرار التسجيل والحفاظ على الجلسة.
 """
 
 import streamlit as st
@@ -52,6 +53,7 @@ def get_logo_html(width=50):
 def retry_on_quota(func, max_retries=5, delay=2.0):
     """
     إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) من Google Sheets.
+    يتم استخدام exponential backoff لزيادة مدة الانتظار تدريجياً.
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -59,10 +61,11 @@ def retry_on_quota(func, max_retries=5, delay=2.0):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
+                # التحقق من أن الخطأ متعلق بتجاوز الحصة
                 if ("429" in str(e) or "Quota exceeded" in str(e)) and attempt < max_retries - 1:
-                    time.sleep(delay * (attempt + 1))
+                    time.sleep(delay * (attempt + 1))  # زيادة فترة الانتظار
                 else:
-                    raise e
+                    raise e  # إعادة رمي الخطأ إذا لم يكن 429 أو بعد استنفاد المحاولات
         return None
     return wrapper
 
@@ -71,6 +74,7 @@ def retry_on_quota(func, max_retries=5, delay=2.0):
 # =============================================================================
 @st.cache_resource
 def get_google_sheets_client():
+    """إنشاء عميل Google Sheets باستخدام بيانات الاعتماد المخزنة في st.secrets."""
     try:
         credentials_dict = {
             "type": st.secrets["google"]["service_account"]["type"],
@@ -103,6 +107,7 @@ def get_google_sheets_client():
 
 @st.cache_resource
 def get_workbook():
+    """فتح ملف Google Sheets مرة واحدة وتخزينه مؤقتاً لتقليل الاستدعاءات."""
     client, spreadsheet_id = get_google_sheets_client()
     if client and spreadsheet_id:
         try:
@@ -113,6 +118,7 @@ def get_workbook():
 
 @st.cache_resource
 def get_worksheet(sheet_name):
+    """الحصول على ورقة عمل محددة من الملف، مع تخزين مؤقت."""
     workbook = get_workbook()
     if workbook:
         try:
@@ -125,6 +131,10 @@ def get_worksheet(sheet_name):
     return None
 
 def init_sheets():
+    """
+    تهيئة جميع الأوراق المطلوبة في ملف Google Sheets.
+    إذا لم تكن موجودة، يتم إنشاؤها مع صفوف العناوين.
+    """
     workbook = get_workbook()
     if not workbook:
         return False
@@ -156,6 +166,7 @@ def init_sheets():
 # =============================================================================
 @retry_on_quota
 def _get_all_records_safe(sheet_name):
+    """جلب جميع السجلات من ورقة معينة بشكل آمن مع إعادة المحاولة عند فشل الاتصال."""
     sheet = get_worksheet(sheet_name)
     if sheet:
         try:
@@ -167,21 +178,26 @@ def _get_all_records_safe(sheet_name):
 
 @st.cache_data(ttl=60)
 def get_users_sheet_data():
+    """جلب بيانات المستخدمين من ورقة Users مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Users")
 
 @st.cache_data(ttl=60)
 def get_attendance_sheet_data():
+    """جلب بيانات الحضور من ورقة Attendance مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Attendance")
 
 @st.cache_data(ttl=60)
 def get_finance_sheet_data():
+    """جلب البيانات المالية من ورقة Finance مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Finance")
 
 @st.cache_data(ttl=60)
 def get_payments_sheet_data():
+    """جلب بيانات المدفوعات من ورقة Payments مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Payments")
 
 def clean_records(records):
+    """تنظيف السجلات: إزالة المسافات البيضاء الزائدة من النصوص."""
     cleaned = []
     for row in records:
         cleaned_row = {}
@@ -194,15 +210,19 @@ def clean_records(records):
     return cleaned
 
 def get_all_users():
+    """جلب جميع المستخدمين بعد تنظيف البيانات."""
     return clean_records(get_users_sheet_data())
 
 def get_all_attendance():
+    """جلب جميع سجلات الحضور بعد التنظيف."""
     return clean_records(get_attendance_sheet_data())
 
 def get_all_finance():
+    """جلب جميع السجلات المالية بعد التنظيف."""
     return clean_records(get_finance_sheet_data())
 
 def get_all_payments():
+    """جلب جميع المدفوعات بعد التنظيف."""
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
@@ -210,6 +230,7 @@ def get_all_payments():
 # =============================================================================
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
+    """إضافة صف جديد إلى نهاية الورقة المحددة."""
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
@@ -226,6 +247,7 @@ def append_row_to_sheet(sheet_name, row_data):
 
 @retry_on_quota
 def update_cell_in_sheet(sheet_name, row, col, value):
+    """تحديث قيمة خلية محددة في الورقة."""
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
@@ -242,6 +264,7 @@ def update_cell_in_sheet(sheet_name, row, col, value):
 
 @retry_on_quota
 def delete_row_from_sheet(sheet_name, row_index):
+    """حذف صف كامل من الورقة."""
     sheet = get_worksheet(sheet_name)
     if sheet:
         try:
@@ -257,6 +280,7 @@ def delete_row_from_sheet(sheet_name, row_index):
 # دوال المستخدمين
 # =============================================================================
 def get_user(username: str):
+    """البحث عن مستخدم معين بالاسم."""
     users = get_all_users()
     username_clean = username.strip() if username else ""
     for user in users:
@@ -265,6 +289,7 @@ def get_user(username: str):
     return None
 
 def check_coach_exists():
+    """التحقق من وجود مستخدم بدور 'coach' في النظام."""
     users = get_all_users()
     for user in users:
         if user.get("role", "").strip() == "coach":
@@ -272,6 +297,7 @@ def check_coach_exists():
     return False
 
 def add_user(username: str, password: str, role: str = "player"):
+    """إضافة مستخدم جديد إلى قاعدة البيانات."""
     username = username.strip() if username else ""
     password = password.strip() if password else ""
     if get_user(username):
@@ -282,6 +308,7 @@ def add_user(username: str, password: str, role: str = "player"):
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def validate_triple_name(name: str) -> bool:
+    """التحقق من أن الاسم ثلاثي باللغة العربية."""
     if not name or not isinstance(name, str):
         return False
     name = name.strip()
@@ -296,40 +323,68 @@ def validate_triple_name(name: str) -> bool:
     return True
 
 # =============================================================================
-# دوال الحضور
+# دوال الحضور (مع منع التكرار)
 # =============================================================================
-def record_attendance(player_name: str, status: str, recorded_by: str):
+def is_attendance_recorded_today(player_name: str) -> bool:
+    """
+    التحقق مما إذا كان قد تم تسجيل حضور أو غياب للاعب اليوم.
+    تعتبر أي حالة (Present أو Absent) مسجلة مسبقاً.
+    """
     today = datetime.now().strftime("%Y-%m-%d")
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
     for r in records:
         if r.get("player_name", "").strip() == player_name.strip() and r.get("date") == today:
-            return False, "تم تسجيل الحضور مسبقاً لهذا اليوم"
+            return True
+    return False
+
+def record_attendance(player_name: str, status: str, recorded_by: str):
+    """
+    تسجيل حضور أو غياب لاعب واحد.
+    يتم التحقق من عدم وجود تسجيل مسبق في نفس اليوم.
+    """
+    if is_attendance_recorded_today(player_name):
+        return False, f"تم تسجيل حالة للاعب {player_name} مسبقاً اليوم. لا يمكن التسجيل مرة أخرى."
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if append_row_to_sheet("Attendance", [player_name.strip(), today, status, recorded_by.strip(), created_at]):
         return True, f"تم تسجيل {'الحضور' if status == 'Present' else 'الغياب'} بنجاح"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
+    """
+    تسجيل حضور أو غياب لمجموعة من اللاعبين.
+    يتجاهل اللاعبين الذين تم تسجيلهم مسبقاً اليوم ويعرض رسالة بذلك.
+    """
     today = datetime.now().strftime("%Y-%m-%d")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
+    
+    # تجميع أسماء اللاعبين الذين لديهم سجل اليوم
+    recorded_today = {r["player_name"].strip() for r in records if r.get("date") == today}
+    
     success_count = 0
+    skipped_players = []
+    
     for player_name in player_names:
-        exists = False
-        for r in records:
-            if r.get("player_name", "").strip() == player_name.strip() and r.get("date") == today:
-                exists = True
-                break
-        if not exists:
-            if append_row_to_sheet("Attendance", [player_name.strip(), today, status, recorded_by.strip(), created_at]):
-                success_count += 1
-    return True, f"تم تسجيل {success_count} من {len(player_names)} لاعبين"
+        if player_name.strip() in recorded_today:
+            skipped_players.append(player_name)
+            continue
+        if append_row_to_sheet("Attendance", [player_name.strip(), today, status, recorded_by.strip(), created_at]):
+            success_count += 1
+    
+    msg = f"تم تسجيل {success_count} من {len(player_names)} لاعبين."
+    if skipped_players:
+        msg += f" (تم تخطي {len(skipped_players)} لاعبين لأنهم مسجلين مسبقاً اليوم)"
+    return True, msg
 
 def get_player_attendance(player_name: str):
+    """جلب جميع سجلات الحضور للاعب معين."""
     records = get_all_attendance()
     return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
 
 def get_attendance_stats(player_name: str):
+    """حساب إحصائيات الحضور للاعب."""
     records = get_player_attendance(player_name)
     if not records:
         return {"total": 0, "present": 0, "absent": 0, "percentage": 0}
@@ -340,6 +395,7 @@ def get_attendance_stats(player_name: str):
     return {"total": total, "present": present, "absent": absent, "percentage": round(percentage, 1)}
 
 def get_today_attendance():
+    """جلب سجلات الحضور لليوم الحالي فقط."""
     today = datetime.now().strftime("%Y-%m-%d")
     records = get_all_attendance()
     return [r for r in records if r.get("date") == today]
@@ -348,6 +404,7 @@ def get_today_attendance():
 # دوال الاشتراكات والمدفوعات (ورقة Finance موحدة مع Payments منفصلة)
 # =============================================================================
 def get_player_finance(player_name: str):
+    """جلب السجل المالي للاعب من ورقة Finance."""
     records = get_all_finance()
     for r in records:
         if r.get("player_name", "").strip() == player_name.strip():
@@ -355,6 +412,7 @@ def get_player_finance(player_name: str):
     return None
 
 def calculate_total_paid_from_payments(player_name: str) -> float:
+    """حساب إجمالي المدفوعات الفعلية للاعب من ورقة Payments."""
     payments = get_all_payments()
     total = 0.0
     for p in payments:
@@ -366,6 +424,9 @@ def calculate_total_paid_from_payments(player_name: str) -> float:
     return total
 
 def sync_total_paid_in_finance(player_name: str):
+    """
+    تحديث حقل total_paid في ورقة Finance ليطابق مجموع المدفوعات الفعلية في Payments.
+    """
     finance = get_player_finance(player_name)
     if not finance:
         return
@@ -384,11 +445,15 @@ def sync_total_paid_in_finance(player_name: str):
             update_cell_in_sheet("Finance", row_idx, 7, latest_date)
 
 def get_player_payments(player_name: str):
+    """جلب جميع مدفوعات لاعب معين من ورقة Payments."""
     records = get_all_payments()
     return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
 
 def add_or_update_finance_record(player_name: str, season_fee: float, start_date: str, end_date: str, status: str,
                                  amount_paid: float = 0, payment_method: str = "", payment_date: str = "", notes: str = ""):
+    """
+    إضافة أو تحديث سجل مالي للاعب. إذا تم توفير amount_paid > 0، يتم تسجيل دفعة جديدة أيضاً.
+    """
     workbook = get_workbook()
     if not workbook:
         return False, "خطأ في الاتصال بقاعدة البيانات"
@@ -430,6 +495,7 @@ def add_or_update_finance_record(player_name: str, season_fee: float, start_date
     return True, f"تم {action} الاشتراك بنجاح"
 
 def delete_finance_record(player_name: str):
+    """حذف سجل الاشتراك للاعب من ورقة Finance."""
     all_finance = get_all_finance()
     row_idx = None
     for idx, rec in enumerate(all_finance, start=2):
@@ -441,6 +507,7 @@ def delete_finance_record(player_name: str):
     return False
 
 def record_payment(player_name: str, amount: float, payment_method: str, payment_date: str, notes: str = "", recorded_by: str = ""):
+    """تسجيل دفعة جديدة في ورقة Payments وتحديث total_paid في Finance."""
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if append_row_to_sheet("Payments", [player_name.strip(), amount, payment_method, payment_date, notes, recorded_by.strip(), created_at]):
         sync_total_paid_in_finance(player_name)
@@ -449,6 +516,7 @@ def record_payment(player_name: str, amount: float, payment_method: str, payment
 
 def update_payment_record(payment_row_index: int, player_name: str, old_amount: float, new_amount: float,
                           payment_method: str, payment_date: str, notes: str = ""):
+    """تحديث دفعة موجودة مع تعديل total_paid في Finance."""
     sheet = get_worksheet("Payments")
     if sheet:
         update_cell_in_sheet("Payments", payment_row_index, 2, new_amount)
@@ -460,6 +528,7 @@ def update_payment_record(payment_row_index: int, player_name: str, old_amount: 
     return False, "خطأ في تحديث الدفعة"
 
 def delete_payment_record(payment_row_index: int, player_name: str):
+    """حذف دفعة وتحديث total_paid في Finance."""
     sheet = get_worksheet("Payments")
     if sheet:
         if delete_row_from_sheet("Payments", payment_row_index):
@@ -468,6 +537,7 @@ def delete_payment_record(payment_row_index: int, player_name: str):
     return False, "خطأ في حذف الدفعة"
 
 def get_payment_summary(player_name: str):
+    """ملخص مالي للاعب: قيمة الاشتراك، إجمالي المدفوع، المتبقي، وحالة الاشتراك."""
     finance = get_player_finance(player_name)
     if not finance:
         return {"season_fee": 0, "total_paid": 0, "remaining": 0, "status": "No Subscription"}
@@ -483,6 +553,7 @@ def get_payment_summary(player_name: str):
 # تهيئة الجلسة
 # =============================================================================
 def init_session():
+    """تهيئة متغيرات الجلسة (session_state) عند بدء التطبيق."""
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
     if "username" not in st.session_state:
@@ -495,6 +566,7 @@ def init_session():
         st.session_state.finance_authenticated = False
 
 def login(username: str, password: str):
+    """التحقق من بيانات الدخول وتسجيل المستخدم في الجلسة."""
     username = username.strip() if username else ""
     password = password.strip() if password else ""
     user = get_user(username)
@@ -508,6 +580,7 @@ def login(username: str, password: str):
     return False, "اسم المستخدم أو كلمة المرور غير صحيحة"
 
 def logout():
+    """تسجيل الخروج وإعادة تعيين الجلسة."""
     st.session_state.logged_in = False
     st.session_state.username = None
     st.session_state.role = None
@@ -516,6 +589,7 @@ def logout():
     st.rerun()
 
 def navigate_to(page: str):
+    """تغيير الصفحة الحالية وإعادة تحميل التطبيق."""
     st.session_state.current_page = page
     st.rerun()
 
@@ -721,6 +795,7 @@ st.markdown("""
 # شريط التنقل (مع شعار)
 # =============================================================================
 def navigation_bar():
+    """عرض شريط التنقل العلوي مع أزرار الصفحات ومعلومات المستخدم."""
     col_logo, col_title, col_user = st.columns([0.7, 2.5, 1.2])
     with col_logo:
         st.markdown(get_logo_html(50), unsafe_allow_html=True)
@@ -765,6 +840,7 @@ def navigation_bar():
 # صفحة المصادقة المالية
 # =============================================================================
 def finance_auth_wall():
+    """صفحة إدخال كلمة المرور للوصول إلى التقارير المالية."""
     st.markdown("## 🔐 المصادقة المطلوبة")
     st.markdown("الرجاء إدخال كلمة المرور للوصول إلى التقارير المالية.")
     password = st.text_input("كلمة المرور", type="password", key="finance_pass_input")
