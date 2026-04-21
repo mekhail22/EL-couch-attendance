@@ -4,7 +4,7 @@
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
 الألوان: غامقة وفاخرة (أخضر زمردي، أزرق داكن، أسود مخملي).
-تمت إضافة ميزات منع تكرار التسجيل والحفاظ على الجلسة.
+تم إصلاح مشكلة فقدان الجلسة عند تحديث الصفحة.
 """
 
 import streamlit as st
@@ -61,11 +61,10 @@ def retry_on_quota(func, max_retries=5, delay=2.0):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                # التحقق من أن الخطأ متعلق بتجاوز الحصة
                 if ("429" in str(e) or "Quota exceeded" in str(e)) and attempt < max_retries - 1:
-                    time.sleep(delay * (attempt + 1))  # زيادة فترة الانتظار
+                    time.sleep(delay * (attempt + 1))
                 else:
-                    raise e  # إعادة رمي الخطأ إذا لم يكن 429 أو بعد استنفاد المحاولات
+                    raise e
         return None
     return wrapper
 
@@ -360,7 +359,6 @@ def record_multiple_attendance(player_names: list, status: str, recorded_by: str
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
     
-    # تجميع أسماء اللاعبين الذين لديهم سجل اليوم
     recorded_today = {r["player_name"].strip() for r in records if r.get("date") == today}
     
     success_count = 0
@@ -550,20 +548,27 @@ def get_payment_summary(player_name: str):
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
 
 # =============================================================================
-# تهيئة الجلسة
+# تهيئة الجلسة (تم إصلاحها لتحافظ على الحالة بعد التحديث)
 # =============================================================================
 def init_session():
-    """تهيئة متغيرات الجلسة (session_state) عند بدء التطبيق."""
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-    if "username" not in st.session_state:
-        st.session_state.username = None
-    if "role" not in st.session_state:
-        st.session_state.role = None
-    if "current_page" not in st.session_state:
-        st.session_state.current_page = "dashboard"
-    if "finance_authenticated" not in st.session_state:
-        st.session_state.finance_authenticated = False
+    """
+    تهيئة متغيرات الجلسة (session_state) عند بدء التطبيق.
+    **هام**: لا تقم بإعادة تعيين القيم إذا كانت موجودة مسبقاً للحفاظ على الجلسة.
+    """
+    # قائمة المفاتيح المطلوبة مع قيمها الافتراضية
+    defaults = {
+        "logged_in": False,
+        "username": None,
+        "role": None,
+        "current_page": "dashboard",
+        "finance_authenticated": False,
+        "sheets_initialized": False
+    }
+    
+    # تعيين القيم الافتراضية فقط إذا لم تكن موجودة
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
 
 def login(username: str, password: str):
     """التحقق من بيانات الدخول وتسجيل المستخدم في الجلسة."""
@@ -1315,10 +1320,15 @@ def login_page():
 # الدالة الرئيسية
 # =============================================================================
 def main():
+    # تهيئة الجلسة مع الحفاظ على القيم الموجودة
     init_session()
-    if "sheets_initialized" not in st.session_state:
-        init_sheets()
-        st.session_state.sheets_initialized = True
+    
+    # تهيئة الأوراق إذا لم تكن قد تمت بالفعل
+    if not st.session_state.sheets_initialized:
+        if init_sheets():
+            st.session_state.sheets_initialized = True
+    
+    # التحقق من حالة تسجيل الدخول
     if not st.session_state.logged_in:
         login_page()
     else:
