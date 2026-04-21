@@ -3,7 +3,7 @@
 =====================================================
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
-الألوان: أبيض، أسود، أزرق بسيط.
+الألوان: غامقة وفاخرة (أخضر زمردي، أزرق داكن، أسود مخملي).
 """
 
 import streamlit as st
@@ -41,7 +41,7 @@ def get_logo_html(width=50):
             with open(logo_path, "rb") as f:
                 data = f.read()
                 b64 = base64.b64encode(data).decode()
-                return f'<img src="data:image/jpeg;base64,{b64}" style="width:{width}px; height:auto; border-radius:12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">'
+                return f'<img src="data:image/jpeg;base64,{b64}" style="width:{width}px; height:auto; border-radius:12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">'
         except:
             pass
     return f'<span style="font-size:{width}px;">⚽</span>'
@@ -520,7 +520,7 @@ def navigate_to(page: str):
     st.rerun()
 
 # =============================================================================
-# CSS مخصص (أبيض، أسود، أزرق بسيط)
+# CSS مخصص (ألوان غامقة فاخرة: أخضر زمردي، أزرق داكن، أسود)
 # =============================================================================
 st.markdown("""
 <style>
@@ -528,9 +528,9 @@ st.markdown("""
     * { font-family: 'Cairo', sans-serif !important; }
     .main { direction: rtl; }
     
-    /* خلفية بيضاء مع تدرج أزرق فاتح */
+    /* خلفية سوداء مخملية مع تدرج أخضر داكن */
     .stApp {
-        background: linear-gradient(145deg, #f0f7ff 0%, #ffffff 100%);
+        background: radial-gradient(circle at top left, #0a1c14, #030a07);
     }
     
     /* إخفاء عناصر Streamlit الافتراضية */
@@ -540,32 +540,34 @@ st.markdown("""
     div[data-testid="stToolbar"], div[data-testid="stDecoration"],
     div[data-testid="stStatusWidget"] { display: none !important; }
     
-    /* شريط التنقل */
+    /* شريط التنقل الزجاجي */
     .nav-container {
-        background: white;
+        background: rgba(20, 50, 40, 0.7);
+        backdrop-filter: blur(12px);
         border-radius: 50px;
         padding: 10px 20px;
         margin: 20px 0;
-        box-shadow: 0 4px 15px rgba(0, 49, 102, 0.1);
-        border: 1px solid #d9e6f2;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(80, 180, 140, 0.3);
     }
     .nav-container .stButton > button {
-        background: white !important;
-        color: #1a3a5c !important;
-        border: 1px solid #b0c8e0 !important;
+        background: rgba(0, 0, 0, 0.25) !important;
+        color: #e0f0e8 !important;
+        border: 1px solid #2a7a5f !important;
         border-radius: 30px !important;
         padding: 10px 15px !important;
         font-size: 16px !important;
         font-weight: 600 !important;
         width: 100% !important;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.03);
+        backdrop-filter: blur(4px);
+        transition: all 0.3s;
     }
     .nav-container .stButton > button:hover {
-        background: #1a3a5c !important;
+        background: #1f6e54 !important;
         color: white !important;
-        border-color: #1a3a5c !important;
+        border-color: #4ecb9c !important;
         transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(26, 58, 92, 0.2);
+        box-shadow: 0 6px 18px rgba(30, 200, 120, 0.3);
     }
     
     /* حاوية تسجيل الدخول */
@@ -573,11 +575,12 @@ st.markdown("""
         max-width: 480px;
         margin: 40px auto;
         padding: 40px 35px;
-        background: white;
-        border-radius: 24px;
-        box-shadow: 0 20px 40px rgba(0, 20, 60, 0.12);
+        background: rgba(10, 30, 25, 0.9);
+        backdrop-filter: blur(10px);
+        border-radius: 30px;
+        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.7);
         text-align: center;
-        border: 1px solid #e3ecf5;
+        border: 1px solid #2c7a60;
     }
     .login-icon {
         margin-bottom: 20px;
@@ -585,14 +588,14 @@ st.markdown("""
         justify-content: center;
     }
     .login-title {
-        color: #1a3a5c !important;
-        font-size: 40px !important;
+        color: #c0f0d0 !important;
+        font-size: 42px !important;
         font-weight: 800 !important;
         margin-bottom: 8px;
-        letter-spacing: 1px;
+        text-shadow: 0 4px 12px #0f2f22;
     }
     .login-subtitle {
-        color: #4a627a !important;
+        color: #a0d0b8 !important;
         font-size: 20px !important;
         font-weight: 500 !important;
         margin-bottom: 30px;
@@ -600,109 +603,116 @@ st.markdown("""
     
     /* بطاقات الإحصائيات */
     .stat-card {
-        background: white;
-        color: #1a3a5c;
-        border-radius: 18px;
+        background: linear-gradient(145deg, #15382b, #0c231a);
+        color: white;
+        border-radius: 20px;
         padding: 20px 10px;
         text-align: center;
-        box-shadow: 0 6px 14px rgba(0, 35, 70, 0.05);
-        border: 1px solid #d9e6f2;
+        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+        border: 1px solid #2f7a5a;
     }
-    .stat-number { font-size: 38px; font-weight: 800; color: #1a3a5c; margin-bottom: 5px; }
-    .stat-label { font-size: 15px; font-weight: 500; color: #3a5e7e; }
+    .stat-number { font-size: 40px; font-weight: 800; color: #b0f0c0; margin-bottom: 5px; }
+    .stat-label { font-size: 15px; font-weight: 500; color: #c0e0d0; }
     
     /* صناديق الترحيب والمعلومات */
     .welcome-box {
-        background: #1a3a5c;
+        background: linear-gradient(145deg, #1a5a44, #0e3628);
         color: white;
         padding: 20px;
-        border-radius: 18px;
+        border-radius: 20px;
         margin-bottom: 20px;
         text-align: center;
-        box-shadow: 0 6px 14px rgba(26, 58, 92, 0.15);
+        box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+        border: 1px solid #3fa07c;
     }
     .info-box {
-        background: #e9f0fa;
-        border-right: 6px solid #1a3a5c;
+        background: #163f31;
+        border-right: 6px solid #40c090;
         padding: 15px 20px;
-        border-radius: 12px;
+        border-radius: 16px;
         margin-bottom: 20px;
-        color: #1a3a5c !important;
+        color: #e0f5e8 !important;
         font-weight: 500;
     }
     
     /* الأزرار العامة */
     .stButton > button {
-        background: #1a3a5c;
+        background: linear-gradient(145deg, #1f6e54, #144d3a);
         color: white;
         border: none;
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 12px 25px;
         font-size: 16px;
         font-weight: 600;
         width: 100%;
-        box-shadow: 0 4px 10px rgba(26, 58, 92, 0.2);
+        box-shadow: 0 6px 15px rgba(0, 20, 0, 0.5);
+        border: 1px solid #3da07a;
         transition: all 0.2s;
     }
     .stButton > button:hover {
-        background: #0f2a44;
+        background: #2a8f6a;
         transform: translateY(-2px);
-        box-shadow: 0 8px 18px rgba(26, 58, 92, 0.3);
+        box-shadow: 0 10px 25px rgba(40, 180, 120, 0.4);
     }
     
     /* حقول الإدخال */
     .stTextInput > div > div > input {
-        border-radius: 12px;
-        border: 1.5px solid #cbdae8;
+        border-radius: 14px;
+        border: 1.5px solid #2e7a5c;
         padding: 12px 15px;
         text-align: right;
-        background: white;
-        color: #1a1e24;
+        background: #0f2b20;
+        color: #f0faf0;
     }
     .stTextInput > div > div > input:focus {
-        border-color: #1a3a5c;
-        box-shadow: 0 0 0 3px rgba(26, 58, 92, 0.1);
+        border-color: #50d0a0;
+        box-shadow: 0 0 0 3px rgba(80, 200, 150, 0.3);
     }
     
     /* التبويبات */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
     .stTabs [data-baseweb="tab"] {
-        background: white;
-        border-radius: 12px 12px 0 0;
+        background: #13382a;
+        border-radius: 16px 16px 0 0;
         padding: 10px 22px;
-        color: #1a3a5c;
-        border: 1px solid #d9e6f2;
+        color: #c8e8d8;
+        border: 1px solid #2f785a;
         border-bottom: none;
         font-weight: 600;
     }
     .stTabs [aria-selected="true"] {
-        background: #1a3a5c !important;
+        background: #1f6e54 !important;
         color: white !important;
-        border-color: #1a3a5c;
+        border-color: #50c898;
     }
     
     /* معلومات المستخدم */
     .user-info {
-        color: #1a3a5c;
+        color: #e0f0e4;
         font-size: 16px;
         font-weight: 600;
         padding: 10px 0;
         text-align: center;
-        background: white;
+        background: rgba(20, 60, 45, 0.6);
+        backdrop-filter: blur(5px);
         border-radius: 30px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+        border: 1px solid #3d8e6e;
     }
     
     /* جداول البيانات */
     .stDataFrame {
-        border-radius: 16px;
-        border: 1px solid #d9e6f2;
+        border-radius: 18px;
+        border: 1px solid #2f785a;
         overflow: hidden;
+        background: #0a1f16;
     }
     
     /* تحسين العناوين */
     h1, h2, h3, h4, h5, h6 {
-        color: #1a3a5c !important;
+        color: #c0f0d0 !important;
+    }
+    p, span, div {
+        color: #d0e8dc;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -715,7 +725,7 @@ def navigation_bar():
     with col_logo:
         st.markdown(get_logo_html(50), unsafe_allow_html=True)
     with col_title:
-        st.markdown('<h2 style="color:#1a3a5c; margin:0; font-size:26px; text-align:right; padding-right:10px;">⚽ الكوتش أكاديمي</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 style="color:#c0f0d0; margin:0; font-size:26px; text-align:right; padding-right:10px;">⚽ الكوتش أكاديمي</h2>', unsafe_allow_html=True)
     with col_user:
         role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
         role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
@@ -816,7 +826,7 @@ def coach_attendance_page():
             if success:
                 st.success(msg)
                 st.toast("✅ تم تسجيل الحضور لجميع اللاعبين!", icon="✅")
-                time.sleep(3)
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error(msg)
@@ -826,7 +836,7 @@ def coach_attendance_page():
             if success:
                 st.success(msg)
                 st.toast("✅ تم تسجيل الغياب لجميع اللاعبين!", icon="✅")
-                time.sleep(3)
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error(msg)
@@ -839,7 +849,7 @@ def coach_attendance_page():
             if success:
                 st.success(msg)
                 st.toast(f"✅ تم تسجيل حضور {len(present)} لاعب!", icon="✅")
-                time.sleep(3)
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error(msg)
@@ -854,7 +864,7 @@ def coach_attendance_page():
             if success:
                 st.success(msg)
                 st.toast(f"✅ تم تسجيل غياب {len(absent)} لاعب!", icon="✅")
-                time.sleep(3)
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error(msg)
@@ -872,7 +882,7 @@ def coach_attendance_page():
             if success:
                 st.success(msg)
                 st.toast(f"✅ تم تسجيل {'الحضور' if ss=='Present' else 'الغياب'} لـ {sp}!", icon="✅")
-                time.sleep(3)
+                time.sleep(2)
                 st.rerun()
             else:
                 st.error(msg)
@@ -930,7 +940,7 @@ def coach_subscriptions_payments_page():
                     if success:
                         st.success("✅ تم حفظ الاشتراك والدفعة بنجاح!")
                         st.toast("✅ اشتراك جديد مع دفعة!", icon="💳")
-                        time.sleep(3)
+                        time.sleep(2)
                         st.rerun()
                     else:
                         st.error(msg)
@@ -965,7 +975,7 @@ def coach_subscriptions_payments_page():
                         if success:
                             st.success("✅ تم تحديث الاشتراك بنجاح!")
                             st.toast("✅ تم تحديث الاشتراك!", icon="✏️")
-                            time.sleep(3)
+                            time.sleep(2)
                             st.rerun()
                         else:
                             st.error(msg)
@@ -974,7 +984,7 @@ def coach_subscriptions_payments_page():
                         if delete_finance_record(sel):
                             st.success("✅ تم حذف الاشتراك بنجاح!")
                             st.toast("✅ تم حذف الاشتراك!", icon="🗑️")
-                            time.sleep(3)
+                            time.sleep(2)
                             st.rerun()
                         else:
                             st.error("❌ فشل حذف الاشتراك")
@@ -1008,7 +1018,7 @@ def coach_subscriptions_payments_page():
                         if success:
                             st.success("✅ تم تحديث الدفعة بنجاح!")
                             st.toast("✅ تم تحديث الدفعة!", icon="💰")
-                            time.sleep(3)
+                            time.sleep(2)
                             st.rerun()
                         else:
                             st.error(msg)
@@ -1018,7 +1028,7 @@ def coach_subscriptions_payments_page():
                         if success:
                             st.success("✅ تم حذف الدفعة بنجاح!")
                             st.toast("✅ تم حذف الدفعة!", icon="🗑️")
-                            time.sleep(3)
+                            time.sleep(2)
                             st.rerun()
                         else:
                             st.error(msg)
@@ -1187,7 +1197,7 @@ def login_page():
                 if success:
                     st.success(msg)
                     st.toast("✅ تم تسجيل الدخول بنجاح!", icon="🔓")
-                    time.sleep(3)
+                    time.sleep(2)
                     st.rerun()
                 else:
                     st.error(msg)
@@ -1218,7 +1228,7 @@ def login_page():
                 if success:
                     st.success(msg)
                     st.toast("✅ تم إنشاء الحساب بنجاح!", icon="🎉")
-                    time.sleep(3)
+                    time.sleep(2)
                     st.rerun()
                 else:
                     st.error(msg)
