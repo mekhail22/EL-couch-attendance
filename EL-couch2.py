@@ -3,7 +3,7 @@
 =====================================================
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
-تم تحسين آلية تحديد دور المستخدم (الكابتن أولاً ثم لاعبين) مع التحقق من سلامة الجداول.
+تم تحسين الكتابة المجمعة لتجنب تجاوز حصة Google Sheets (خطأ 429).
 """
 
 import streamlit as st
@@ -43,9 +43,12 @@ def get_logo_html(width=50):
     return f'<span style="font-size:{width}px;">⚽</span>'
 
 # =============================================================================
-# دوال مساعدة للتخزين المؤقت وإعادة المحاولة (لحل مشكلة 429)
+# دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
-def retry_on_quota(func, max_retries=5, delay=2.0):
+def retry_on_quota(func, max_retries=5, delay=3.0):
+    """
+    إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) مع زيادة وقت الانتظار.
+    """
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -121,7 +124,6 @@ def init_sheets():
     workbook = get_workbook()
     if not workbook:
         return False
-
     try:
         required_sheets = {
             "Users": ["username", "password", "role", "created_at"],
@@ -130,22 +132,22 @@ def init_sheets():
                         "total_paid", "last_payment_date", "updated_at"],
             "Payments": ["player_name", "amount", "payment_method", "payment_date", "notes", "recorded_by", "created_at"]
         }
-
         existing_sheets = [sheet.title for sheet in workbook.worksheets()]
-
         for sheet_name, headers in required_sheets.items():
             if sheet_name not in existing_sheets:
                 sheet = workbook.add_worksheet(title=sheet_name, rows=1000, cols=20)
                 sheet.append_row(headers)
             else:
-                # التأكد من وجود الصفوف العناوين (headers) في الورقة الموجودة
+                # التأكد من وجود الصفوف العناوين الصحيحة دون مسح البيانات القديمة
                 sheet = workbook.worksheet(sheet_name)
                 existing_headers = sheet.row_values(1)
-                if existing_headers != headers:
-                    # إذا اختلفت العناوين، نمسح الورقة ونعيد إنشائها
-                    sheet.clear()
-                    sheet.append_row(headers)
-
+                if not existing_headers or existing_headers != headers:
+                    # فقط إذا كانت العناوين فارغة أو مختلفة، نضبطها
+                    if existing_headers:
+                        # نحافظ على البيانات القديمة بقدر الإمكان ونضبط الصف الأول فقط
+                        sheet.update('A1', [headers])
+                    else:
+                        sheet.append_row(headers)
         get_worksheet.clear()
         return True
     except Exception as e:
@@ -153,7 +155,7 @@ def init_sheets():
         return False
 
 # =============================================================================
-# دوال قراءة البيانات مع التخزين المؤقت وإعادة المحاولة
+# دوال قراءة البيانات مع التخزين المؤقت
 # =============================================================================
 @retry_on_quota
 def _get_all_records_safe(sheet_name):
@@ -207,7 +209,7 @@ def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
-# دوال الكتابة (مع إعادة المحاولة)
+# دوال الكتابة (مع دعم الكتابة المجمعة لتجنب 429)
 # =============================================================================
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
@@ -222,6 +224,25 @@ def append_row_to_sheet(sheet_name, row_data):
             return True
         except Exception as e:
             st.error(f"❌ خطأ في الإضافة إلى {sheet_name}: {str(e)}")
+            return False
+    return False
+
+@retry_on_quota
+def append_rows_to_sheet(sheet_name, rows_data):
+    """
+    إضافة عدة صفوف دفعة واحدة لتقليل عدد طلبات API.
+    """
+    sheet = get_worksheet(sheet_name)
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet(sheet_name)
+    if sheet and rows_data:
+        try:
+            sheet.append_rows(rows_data)
+            st.cache_data.clear()
+            return True
+        except Exception as e:
+            st.error(f"❌ خطأ في الإضافة المتعددة إلى {sheet_name}: {str(e)}")
             return False
     return False
 
@@ -255,7 +276,7 @@ def delete_row_from_sheet(sheet_name, row_index):
     return False
 
 # =============================================================================
-# دوال المستخدمين (مع تحسين تحديد الكابتن)
+# دوال المستخدمين
 # =============================================================================
 def get_user(username: str):
     users = get_all_users()
@@ -266,12 +287,8 @@ def get_user(username: str):
     return None
 
 def check_coach_exists():
-    """
-    التحقق من وجود مستخدم واحد على الأقل بدور 'coach' في ورقة Users.
-    نقرأ البيانات مباشرة من الورقة لضمان الدقة.
-    """
-    records = get_all_users()
-    for user in records:
+    users = get_all_users()
+    for user in users:
         if user.get("role", "").strip() == "coach":
             return True
     return False
@@ -301,7 +318,7 @@ def validate_triple_name(name: str) -> bool:
     return True
 
 # =============================================================================
-# دوال الحضور (مع منع التكرار)
+# دوال الحضور (مع معالجة الكتابة المجمعة)
 # =============================================================================
 def is_attendance_recorded_today(player_name: str) -> bool:
     today = datetime.now().strftime("%Y-%m-%d")
@@ -321,18 +338,31 @@ def record_attendance(player_name: str, status: str, recorded_by: str):
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
+    """
+    تسجيل حضور/غياب لمجموعة لاعبين دفعة واحدة لتجنب تجاوز حصة الكتابة.
+    """
     today = datetime.now().strftime("%Y-%m-%d")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
     recorded_today = {r["player_name"].strip() for r in records if r.get("date") == today}
-    success_count = 0
+
+    rows_to_add = []
     skipped_players = []
+    success_count = 0
+
     for player_name in player_names:
         if player_name.strip() in recorded_today:
             skipped_players.append(player_name)
             continue
-        if append_row_to_sheet("Attendance", [player_name.strip(), today, status, recorded_by.strip(), created_at]):
-            success_count += 1
+        rows_to_add.append([player_name.strip(), today, status, recorded_by.strip(), created_at])
+        success_count += 1
+
+    if rows_to_add:
+        if append_rows_to_sheet("Attendance", rows_to_add):
+            pass  # نجاح
+        else:
+            return False, "خطأ في تسجيل الحضور الجماعي"
+
     msg = f"تم تسجيل {success_count} من {len(player_names)} لاعبين."
     if skipped_players:
         msg += f" (تم تخطي {len(skipped_players)} لاعبين لأنهم مسجلين مسبقاً اليوم)"
@@ -498,7 +528,7 @@ def get_payment_summary(player_name: str):
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
 
 # =============================================================================
-# تهيئة الجلسة (محفوظة)
+# تهيئة الجلسة
 # =============================================================================
 def init_session():
     defaults = {
@@ -539,7 +569,7 @@ def navigate_to(page: str):
     st.rerun()
 
 # =============================================================================
-# CSS مخصص (ألوان غامقة فاخرة)
+# CSS مخصص
 # =============================================================================
 st.markdown("""
 <style>
@@ -1065,7 +1095,7 @@ def player_subscription_page():
         st.write(f"الحالة: {'🟢 نشط' if sub.get('subscription_status')=='Active' else '🔴 غير نشط'}")
 
 # =============================================================================
-# صفحة تسجيل الدخول (مع معالجة تحديد الدور بشكل صحيح)
+# صفحة تسجيل الدخول
 # =============================================================================
 def login_page():
     coach_exists = check_coach_exists()
@@ -1094,7 +1124,6 @@ def login_page():
             else:
                 st.error("يرجى إدخال اسم المستخدم وكلمة المرور")
     with tab2:
-        # تحديد الدور بناءً على وجود كابتن حالياً
         role_for_new = "player" if coach_exists else "coach"
         role_text = "لاعب" if coach_exists else "كابتن"
         st.markdown(f'<div class="info-box"><p>👋 سيتم تسجيلك كـ <strong>{role_text}</strong>.</p></div>', unsafe_allow_html=True)
