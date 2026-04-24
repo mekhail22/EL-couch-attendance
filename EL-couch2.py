@@ -3,7 +3,7 @@
 =====================================================
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
-تم تحسين الكتابة المجمعة لتجنب تجاوز حصة Google Sheets (خطأ 429).
+تم تخصيص 50,000 صف لورقة Attendance وباقي الأوراق 1,000 صف.
 """
 
 import streamlit as st
@@ -46,9 +46,6 @@ def get_logo_html(width=50):
 # دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
 def retry_on_quota(func, max_retries=5, delay=3.0):
-    """
-    إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) مع زيادة وقت الانتظار.
-    """
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -63,7 +60,7 @@ def retry_on_quota(func, max_retries=5, delay=3.0):
     return wrapper
 
 # =============================================================================
-# إعداد Google Sheets مع تحسين إدارة الاتصال
+# إعداد Google Sheets
 # =============================================================================
 @st.cache_resource
 def get_google_sheets_client():
@@ -121,38 +118,66 @@ def get_worksheet(sheet_name):
     return None
 
 def init_sheets():
+    """
+    تهيئة الأوراق: Attendance بـ 50000 صف، الباقي بـ 1000 صف.
+    """
     workbook = get_workbook()
     if not workbook:
         return False
+
     try:
         required_sheets = {
-            "Users": ["username", "password", "role", "created_at"],
-            "Attendance": ["player_name", "date", "status", "recorded_by", "created_at"],
-            "Finance": ["player_name", "season_fee", "start_date", "end_date", "subscription_status",
-                        "total_paid", "last_payment_date", "updated_at"],
-            "Payments": ["player_name", "amount", "payment_method", "payment_date", "notes", "recorded_by", "created_at"]
+            "Users": ("Users", ["username", "password", "role", "created_at"], 1000),
+            "Attendance": ("Attendance", ["player_name", "date", "status", "recorded_by", "created_at"], 50000),
+            "Finance": ("Finance", ["player_name", "season_fee", "start_date", "end_date",
+                                    "subscription_status", "total_paid", "last_payment_date", "updated_at"], 1000),
+            "Payments": ("Payments", ["player_name", "amount", "payment_method", "payment_date",
+                                      "notes", "recorded_by", "created_at"], 1000)
         }
-        existing_sheets = [sheet.title for sheet in workbook.worksheets()]
-        for sheet_name, headers in required_sheets.items():
+
+        existing_sheets = {sheet.title: sheet for sheet in workbook.worksheets()}
+
+        for sheet_name, (title, headers, rows_needed) in required_sheets.items():
             if sheet_name not in existing_sheets:
-                sheet = workbook.add_worksheet(title=sheet_name, rows=1000, cols=20)
+                sheet = workbook.add_worksheet(title=title, rows=str(rows_needed), cols=str(len(headers)))
                 sheet.append_row(headers)
             else:
-                # التأكد من وجود الصفوف العناوين الصحيحة دون مسح البيانات القديمة
-                sheet = workbook.worksheet(sheet_name)
+                sheet = existing_sheets[sheet_name]
+                # التأكد من العناوين
                 existing_headers = sheet.row_values(1)
                 if not existing_headers or existing_headers != headers:
-                    # فقط إذا كانت العناوين فارغة أو مختلفة، نضبطها
-                    if existing_headers:
-                        # نحافظ على البيانات القديمة بقدر الإمكان ونضبط الصف الأول فقط
-                        sheet.update('A1', [headers])
-                    else:
-                        sheet.append_row(headers)
+                    sheet.clear()
+                    sheet.append_row(headers)
+                # توسيع الورقة إذا لزم الأمر (خاصة Attendance)
+                current_rows = sheet.row_count
+                if current_rows < rows_needed:
+                    sheet.add_rows(rows_needed - current_rows)
+
         get_worksheet.clear()
         return True
     except Exception as e:
         st.error(f"❌ خطأ في تهيئة Sheets: {str(e)}")
         return False
+
+def ensure_sheet_has_rows(sheet_name, min_rows=100):
+    """
+    التأكد من وجود عدد كافٍ من الصفوف الفارغة في الورقة.
+    إذا قلت الصفوف المتبقية عن min_rows، نضيف 5000 صف إضافية (لـ Attendance) أو 500 لغيرها.
+    """
+    sheet = get_worksheet(sheet_name)
+    if not sheet:
+        return
+    try:
+        total_rows = sheet.row_count
+        # نحتاج معرفة عدد الصفوف المستخدمة حالياً
+        all_values = sheet.get_all_values()
+        used_rows = len(all_values)
+        remaining = total_rows - used_rows
+        if remaining < min_rows:
+            add_rows = 5000 if sheet_name == "Attendance" else 500
+            sheet.add_rows(add_rows)
+    except Exception as e:
+        st.warning(f"تحذير: تعذر توسيع ورقة {sheet_name}: {str(e)}")
 
 # =============================================================================
 # دوال قراءة البيانات مع التخزين المؤقت
@@ -209,7 +234,7 @@ def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
-# دوال الكتابة (مع دعم الكتابة المجمعة لتجنب 429)
+# دوال الكتابة (مع دعم الكتابة المجمعة)
 # =============================================================================
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
@@ -232,12 +257,15 @@ def append_rows_to_sheet(sheet_name, rows_data):
     """
     إضافة عدة صفوف دفعة واحدة لتقليل عدد طلبات API.
     """
+    if not rows_data:
+        return True
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
         sheet = get_worksheet(sheet_name)
-    if sheet and rows_data:
+    if sheet:
         try:
+            ensure_sheet_has_rows(sheet_name, len(rows_data) + 5)
             sheet.append_rows(rows_data)
             st.cache_data.clear()
             return True
@@ -318,7 +346,7 @@ def validate_triple_name(name: str) -> bool:
     return True
 
 # =============================================================================
-# دوال الحضور (مع معالجة الكتابة المجمعة)
+# دوال الحضور (مع منع التكرار وكتابة مجمعة)
 # =============================================================================
 def is_attendance_recorded_today(player_name: str) -> bool:
     today = datetime.now().strftime("%Y-%m-%d")
@@ -358,9 +386,7 @@ def record_multiple_attendance(player_names: list, status: str, recorded_by: str
         success_count += 1
 
     if rows_to_add:
-        if append_rows_to_sheet("Attendance", rows_to_add):
-            pass  # نجاح
-        else:
+        if not append_rows_to_sheet("Attendance", rows_to_add):
             return False, "خطأ في تسجيل الحضور الجماعي"
 
     msg = f"تم تسجيل {success_count} من {len(player_names)} لاعبين."
@@ -528,7 +554,7 @@ def get_payment_summary(player_name: str):
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
 
 # =============================================================================
-# تهيئة الجلسة
+# تهيئة الجلسة (محفوظة)
 # =============================================================================
 def init_session():
     defaults = {
@@ -569,7 +595,7 @@ def navigate_to(page: str):
     st.rerun()
 
 # =============================================================================
-# CSS مخصص
+# CSS مخصص (ألوان غامقة فاخرة)
 # =============================================================================
 st.markdown("""
 <style>
