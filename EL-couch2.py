@@ -4,7 +4,7 @@
 تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
 مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
 الألوان: غامقة وفاخرة (أخضر زمردي، أزرق داكن، أسود مخملي).
-تم إصلاح مشكلة فقدان الجلسة عند تحديث الصفحة.
+تم إضافة تصنيف حسب حالة الدفع في الاشتراكات والمدفوعات والتعديل.
 """
 
 import streamlit as st
@@ -32,10 +32,6 @@ st.set_page_config(
 # دالة عرض الشعار
 # =============================================================================
 def get_logo_html(width=50):
-    """
-    إرجاع كود HTML لعرض الشعار (logo.jpg) إذا كان موجودًا،
-    وإلا أيقونة كرة قدم ⚽.
-    """
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
         try:
@@ -48,13 +44,9 @@ def get_logo_html(width=50):
     return f'<span style="font-size:{width}px;">⚽</span>'
 
 # =============================================================================
-# دوال مساعدة للتخزين المؤقت وإعادة المحاولة (لحل مشكلة 429)
+# دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
 def retry_on_quota(func, max_retries=5, delay=2.0):
-    """
-    إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) من Google Sheets.
-    يتم استخدام exponential backoff لزيادة مدة الانتظار تدريجياً.
-    """
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -69,11 +61,10 @@ def retry_on_quota(func, max_retries=5, delay=2.0):
     return wrapper
 
 # =============================================================================
-# إعداد Google Sheets مع تحسين إدارة الاتصال
+# إعداد Google Sheets
 # =============================================================================
 @st.cache_resource
 def get_google_sheets_client():
-    """إنشاء عميل Google Sheets باستخدام بيانات الاعتماد المخزنة في st.secrets."""
     try:
         credentials_dict = {
             "type": st.secrets["google"]["service_account"]["type"],
@@ -106,7 +97,6 @@ def get_google_sheets_client():
 
 @st.cache_resource
 def get_workbook():
-    """فتح ملف Google Sheets مرة واحدة وتخزينه مؤقتاً لتقليل الاستدعاءات."""
     client, spreadsheet_id = get_google_sheets_client()
     if client and spreadsheet_id:
         try:
@@ -117,7 +107,6 @@ def get_workbook():
 
 @st.cache_resource
 def get_worksheet(sheet_name):
-    """الحصول على ورقة عمل محددة من الملف، مع تخزين مؤقت."""
     workbook = get_workbook()
     if workbook:
         try:
@@ -130,10 +119,6 @@ def get_worksheet(sheet_name):
     return None
 
 def init_sheets():
-    """
-    تهيئة جميع الأوراق المطلوبة في ملف Google Sheets.
-    إذا لم تكن موجودة، يتم إنشاؤها مع صفوف العناوين.
-    """
     workbook = get_workbook()
     if not workbook:
         return False
@@ -161,11 +146,10 @@ def init_sheets():
         return False
 
 # =============================================================================
-# دوال قراءة البيانات مع التخزين المؤقت وإعادة المحاولة
+# دوال قراءة البيانات
 # =============================================================================
 @retry_on_quota
 def _get_all_records_safe(sheet_name):
-    """جلب جميع السجلات من ورقة معينة بشكل آمن مع إعادة المحاولة عند فشل الاتصال."""
     sheet = get_worksheet(sheet_name)
     if sheet:
         try:
@@ -177,26 +161,21 @@ def _get_all_records_safe(sheet_name):
 
 @st.cache_data(ttl=60)
 def get_users_sheet_data():
-    """جلب بيانات المستخدمين من ورقة Users مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Users")
 
 @st.cache_data(ttl=60)
 def get_attendance_sheet_data():
-    """جلب بيانات الحضور من ورقة Attendance مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Attendance")
 
 @st.cache_data(ttl=60)
 def get_finance_sheet_data():
-    """جلب البيانات المالية من ورقة Finance مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Finance")
 
 @st.cache_data(ttl=60)
 def get_payments_sheet_data():
-    """جلب بيانات المدفوعات من ورقة Payments مع تخزين مؤقت لمدة 60 ثانية."""
     return _get_all_records_safe("Payments")
 
 def clean_records(records):
-    """تنظيف السجلات: إزالة المسافات البيضاء الزائدة من النصوص."""
     cleaned = []
     for row in records:
         cleaned_row = {}
@@ -209,27 +188,22 @@ def clean_records(records):
     return cleaned
 
 def get_all_users():
-    """جلب جميع المستخدمين بعد تنظيف البيانات."""
     return clean_records(get_users_sheet_data())
 
 def get_all_attendance():
-    """جلب جميع سجلات الحضور بعد التنظيف."""
     return clean_records(get_attendance_sheet_data())
 
 def get_all_finance():
-    """جلب جميع السجلات المالية بعد التنظيف."""
     return clean_records(get_finance_sheet_data())
 
 def get_all_payments():
-    """جلب جميع المدفوعات بعد التنظيف."""
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
-# دوال الكتابة (مع إعادة المحاولة)
+# دوال الكتابة
 # =============================================================================
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
-    """إضافة صف جديد إلى نهاية الورقة المحددة."""
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
@@ -246,7 +220,6 @@ def append_row_to_sheet(sheet_name, row_data):
 
 @retry_on_quota
 def update_cell_in_sheet(sheet_name, row, col, value):
-    """تحديث قيمة خلية محددة في الورقة."""
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
@@ -263,7 +236,6 @@ def update_cell_in_sheet(sheet_name, row, col, value):
 
 @retry_on_quota
 def delete_row_from_sheet(sheet_name, row_index):
-    """حذف صف كامل من الورقة."""
     sheet = get_worksheet(sheet_name)
     if sheet:
         try:
@@ -279,7 +251,6 @@ def delete_row_from_sheet(sheet_name, row_index):
 # دوال المستخدمين
 # =============================================================================
 def get_user(username: str):
-    """البحث عن مستخدم معين بالاسم."""
     users = get_all_users()
     username_clean = username.strip() if username else ""
     for user in users:
@@ -288,7 +259,6 @@ def get_user(username: str):
     return None
 
 def check_coach_exists():
-    """التحقق من وجود مستخدم بدور 'coach' في النظام."""
     users = get_all_users()
     for user in users:
         if user.get("role", "").strip() == "coach":
@@ -296,7 +266,6 @@ def check_coach_exists():
     return False
 
 def add_user(username: str, password: str, role: str = "player"):
-    """إضافة مستخدم جديد إلى قاعدة البيانات."""
     username = username.strip() if username else ""
     password = password.strip() if password else ""
     if get_user(username):
@@ -307,7 +276,6 @@ def add_user(username: str, password: str, role: str = "player"):
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def validate_triple_name(name: str) -> bool:
-    """التحقق من أن الاسم ثلاثي باللغة العربية."""
     if not name or not isinstance(name, str):
         return False
     name = name.strip()
@@ -325,10 +293,6 @@ def validate_triple_name(name: str) -> bool:
 # دوال الحضور (مع منع التكرار)
 # =============================================================================
 def is_attendance_recorded_today(player_name: str) -> bool:
-    """
-    التحقق مما إذا كان قد تم تسجيل حضور أو غياب للاعب اليوم.
-    تعتبر أي حالة (Present أو Absent) مسجلة مسبقاً.
-    """
     today = datetime.now().strftime("%Y-%m-%d")
     records = get_all_attendance()
     for r in records:
@@ -337,10 +301,6 @@ def is_attendance_recorded_today(player_name: str) -> bool:
     return False
 
 def record_attendance(player_name: str, status: str, recorded_by: str):
-    """
-    تسجيل حضور أو غياب لاعب واحد.
-    يتم التحقق من عدم وجود تسجيل مسبق في نفس اليوم.
-    """
     if is_attendance_recorded_today(player_name):
         return False, f"تم تسجيل حالة للاعب {player_name} مسبقاً اليوم. لا يمكن التسجيل مرة أخرى."
     
@@ -351,10 +311,6 @@ def record_attendance(player_name: str, status: str, recorded_by: str):
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
-    """
-    تسجيل حضور أو غياب لمجموعة من اللاعبين.
-    يتجاهل اللاعبين الذين تم تسجيلهم مسبقاً اليوم ويعرض رسالة بذلك.
-    """
     today = datetime.now().strftime("%Y-%m-%d")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
@@ -377,12 +333,10 @@ def record_multiple_attendance(player_names: list, status: str, recorded_by: str
     return True, msg
 
 def get_player_attendance(player_name: str):
-    """جلب جميع سجلات الحضور للاعب معين."""
     records = get_all_attendance()
     return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
 
 def get_attendance_stats(player_name: str):
-    """حساب إحصائيات الحضور للاعب."""
     records = get_player_attendance(player_name)
     if not records:
         return {"total": 0, "present": 0, "absent": 0, "percentage": 0}
@@ -393,16 +347,14 @@ def get_attendance_stats(player_name: str):
     return {"total": total, "present": present, "absent": absent, "percentage": round(percentage, 1)}
 
 def get_today_attendance():
-    """جلب سجلات الحضور لليوم الحالي فقط."""
     today = datetime.now().strftime("%Y-%m-%d")
     records = get_all_attendance()
     return [r for r in records if r.get("date") == today]
 
 # =============================================================================
-# دوال الاشتراكات والمدفوعات (ورقة Finance موحدة مع Payments منفصلة)
+# دوال الاشتراكات والمدفوعات
 # =============================================================================
 def get_player_finance(player_name: str):
-    """جلب السجل المالي للاعب من ورقة Finance."""
     records = get_all_finance()
     for r in records:
         if r.get("player_name", "").strip() == player_name.strip():
@@ -410,7 +362,6 @@ def get_player_finance(player_name: str):
     return None
 
 def calculate_total_paid_from_payments(player_name: str) -> float:
-    """حساب إجمالي المدفوعات الفعلية للاعب من ورقة Payments."""
     payments = get_all_payments()
     total = 0.0
     for p in payments:
@@ -422,9 +373,6 @@ def calculate_total_paid_from_payments(player_name: str) -> float:
     return total
 
 def sync_total_paid_in_finance(player_name: str):
-    """
-    تحديث حقل total_paid في ورقة Finance ليطابق مجموع المدفوعات الفعلية في Payments.
-    """
     finance = get_player_finance(player_name)
     if not finance:
         return
@@ -443,15 +391,11 @@ def sync_total_paid_in_finance(player_name: str):
             update_cell_in_sheet("Finance", row_idx, 7, latest_date)
 
 def get_player_payments(player_name: str):
-    """جلب جميع مدفوعات لاعب معين من ورقة Payments."""
     records = get_all_payments()
     return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
 
 def add_or_update_finance_record(player_name: str, season_fee: float, start_date: str, end_date: str, status: str,
                                  amount_paid: float = 0, payment_method: str = "", payment_date: str = "", notes: str = ""):
-    """
-    إضافة أو تحديث سجل مالي للاعب. إذا تم توفير amount_paid > 0، يتم تسجيل دفعة جديدة أيضاً.
-    """
     workbook = get_workbook()
     if not workbook:
         return False, "خطأ في الاتصال بقاعدة البيانات"
@@ -493,7 +437,6 @@ def add_or_update_finance_record(player_name: str, season_fee: float, start_date
     return True, f"تم {action} الاشتراك بنجاح"
 
 def delete_finance_record(player_name: str):
-    """حذف سجل الاشتراك للاعب من ورقة Finance."""
     all_finance = get_all_finance()
     row_idx = None
     for idx, rec in enumerate(all_finance, start=2):
@@ -505,7 +448,6 @@ def delete_finance_record(player_name: str):
     return False
 
 def record_payment(player_name: str, amount: float, payment_method: str, payment_date: str, notes: str = "", recorded_by: str = ""):
-    """تسجيل دفعة جديدة في ورقة Payments وتحديث total_paid في Finance."""
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if append_row_to_sheet("Payments", [player_name.strip(), amount, payment_method, payment_date, notes, recorded_by.strip(), created_at]):
         sync_total_paid_in_finance(player_name)
@@ -514,7 +456,6 @@ def record_payment(player_name: str, amount: float, payment_method: str, payment
 
 def update_payment_record(payment_row_index: int, player_name: str, old_amount: float, new_amount: float,
                           payment_method: str, payment_date: str, notes: str = ""):
-    """تحديث دفعة موجودة مع تعديل total_paid في Finance."""
     sheet = get_worksheet("Payments")
     if sheet:
         update_cell_in_sheet("Payments", payment_row_index, 2, new_amount)
@@ -526,7 +467,6 @@ def update_payment_record(payment_row_index: int, player_name: str, old_amount: 
     return False, "خطأ في تحديث الدفعة"
 
 def delete_payment_record(payment_row_index: int, player_name: str):
-    """حذف دفعة وتحديث total_paid في Finance."""
     sheet = get_worksheet("Payments")
     if sheet:
         if delete_row_from_sheet("Payments", payment_row_index):
@@ -535,7 +475,6 @@ def delete_payment_record(payment_row_index: int, player_name: str):
     return False, "خطأ في حذف الدفعة"
 
 def get_payment_summary(player_name: str):
-    """ملخص مالي للاعب: قيمة الاشتراك، إجمالي المدفوع، المتبقي، وحالة الاشتراك."""
     finance = get_player_finance(player_name)
     if not finance:
         return {"season_fee": 0, "total_paid": 0, "remaining": 0, "status": "No Subscription"}
@@ -547,15 +486,22 @@ def get_payment_summary(player_name: str):
     remaining = max(0, season_fee - total_paid)
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
 
+def get_player_payment_status(player_name: str) -> str:
+    """إرجاع حالة الدفع: مدفوع بالكامل، مدفوع جزئيًا، غير مدفوع، أو لا يوجد اشتراك"""
+    summary = get_payment_summary(player_name)
+    if summary["status"] == "No Subscription":
+        return "لا يوجد اشتراك"
+    if summary["remaining"] <= 0:
+        return "مدفوع بالكامل"
+    elif summary["total_paid"] > 0:
+        return "مدفوع جزئيًا"
+    else:
+        return "غير مدفوع"
+
 # =============================================================================
-# تهيئة الجلسة (تم إصلاحها لتحافظ على الحالة بعد التحديث)
+# تهيئة الجلسة (محفوظة)
 # =============================================================================
 def init_session():
-    """
-    تهيئة متغيرات الجلسة (session_state) عند بدء التطبيق.
-    **هام**: لا تقم بإعادة تعيين القيم إذا كانت موجودة مسبقاً للحفاظ على الجلسة.
-    """
-    # قائمة المفاتيح المطلوبة مع قيمها الافتراضية
     defaults = {
         "logged_in": False,
         "username": None,
@@ -564,14 +510,11 @@ def init_session():
         "finance_authenticated": False,
         "sheets_initialized": False
     }
-    
-    # تعيين القيم الافتراضية فقط إذا لم تكن موجودة
     for key, default_value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = default_value
 
 def login(username: str, password: str):
-    """التحقق من بيانات الدخول وتسجيل المستخدم في الجلسة."""
     username = username.strip() if username else ""
     password = password.strip() if password else ""
     user = get_user(username)
@@ -585,7 +528,6 @@ def login(username: str, password: str):
     return False, "اسم المستخدم أو كلمة المرور غير صحيحة"
 
 def logout():
-    """تسجيل الخروج وإعادة تعيين الجلسة."""
     st.session_state.logged_in = False
     st.session_state.username = None
     st.session_state.role = None
@@ -594,213 +536,79 @@ def logout():
     st.rerun()
 
 def navigate_to(page: str):
-    """تغيير الصفحة الحالية وإعادة تحميل التطبيق."""
     st.session_state.current_page = page
     st.rerun()
 
 # =============================================================================
-# CSS مخصص (ألوان غامقة فاخرة: أخضر زمردي، أزرق داكن، أسود)
+# CSS مخصص (ألوان غامقة)
 # =============================================================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
     * { font-family: 'Cairo', sans-serif !important; }
     .main { direction: rtl; }
-    
-    /* خلفية سوداء مخملية مع تدرج أخضر داكن */
-    .stApp {
-        background: radial-gradient(circle at top left, #0a1c14, #030a07);
-    }
-    
-    /* إخفاء عناصر Streamlit الافتراضية */
+    .stApp { background: radial-gradient(circle at top left, #0a1c14, #030a07); }
     [data-testid="stSidebar"] { display: none !important; }
     header[data-testid="stHeader"] { display: none !important; }
     .stDeployButton, .stActionButton, #MainMenu, footer,
     div[data-testid="stToolbar"], div[data-testid="stDecoration"],
     div[data-testid="stStatusWidget"] { display: none !important; }
     
-    /* شريط التنقل الزجاجي */
     .nav-container {
-        background: rgba(20, 50, 40, 0.7);
-        backdrop-filter: blur(12px);
-        border-radius: 50px;
-        padding: 10px 20px;
-        margin: 20px 0;
-        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.6);
-        border: 1px solid rgba(80, 180, 140, 0.3);
+        background: rgba(20, 50, 40, 0.7); backdrop-filter: blur(12px);
+        border-radius: 50px; padding: 10px 20px; margin: 20px 0;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.6); border: 1px solid rgba(80, 180, 140, 0.3);
     }
     .nav-container .stButton > button {
-        background: rgba(0, 0, 0, 0.25) !important;
-        color: #e0f0e8 !important;
-        border: 1px solid #2a7a5f !important;
-        border-radius: 30px !important;
-        padding: 10px 15px !important;
-        font-size: 16px !important;
-        font-weight: 600 !important;
-        width: 100% !important;
-        backdrop-filter: blur(4px);
-        transition: all 0.3s;
+        background: rgba(0, 0, 0, 0.25) !important; color: #e0f0e8 !important;
+        border: 1px solid #2a7a5f !important; border-radius: 30px !important;
+        padding: 10px 15px !important; font-size: 16px !important; font-weight: 600 !important;
+        width: 100% !important; backdrop-filter: blur(4px); transition: all 0.3s;
     }
     .nav-container .stButton > button:hover {
-        background: #1f6e54 !important;
-        color: white !important;
-        border-color: #4ecb9c !important;
-        transform: translateY(-2px);
+        background: #1f6e54 !important; color: white !important;
+        border-color: #4ecb9c !important; transform: translateY(-2px);
         box-shadow: 0 6px 18px rgba(30, 200, 120, 0.3);
     }
     
-    /* حاوية تسجيل الدخول */
     .login-container {
-        max-width: 480px;
-        margin: 40px auto;
-        padding: 40px 35px;
-        background: rgba(10, 30, 25, 0.9);
-        backdrop-filter: blur(10px);
-        border-radius: 30px;
-        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.7);
-        text-align: center;
-        border: 1px solid #2c7a60;
+        max-width: 480px; margin: 40px auto; padding: 40px 35px;
+        background: rgba(10, 30, 25, 0.9); backdrop-filter: blur(10px);
+        border-radius: 30px; box-shadow: 0 25px 50px rgba(0, 0, 0, 0.7);
+        text-align: center; border: 1px solid #2c7a60;
     }
-    .login-icon {
-        margin-bottom: 20px;
-        display: flex;
-        justify-content: center;
-    }
-    .login-title {
-        color: #c0f0d0 !important;
-        font-size: 42px !important;
-        font-weight: 800 !important;
-        margin-bottom: 8px;
-        text-shadow: 0 4px 12px #0f2f22;
-    }
-    .login-subtitle {
-        color: #a0d0b8 !important;
-        font-size: 20px !important;
-        font-weight: 500 !important;
-        margin-bottom: 30px;
-    }
+    .login-icon { margin-bottom: 20px; display: flex; justify-content: center; }
+    .login-title { color: #c0f0d0 !important; font-size: 42px !important; font-weight: 800 !important; margin-bottom: 8px; text-shadow: 0 4px 12px #0f2f22; }
+    .login-subtitle { color: #a0d0b8 !important; font-size: 20px !important; font-weight: 500 !important; margin-bottom: 30px; }
     
-    /* بطاقات الإحصائيات */
-    .stat-card {
-        background: linear-gradient(145deg, #15382b, #0c231a);
-        color: white;
-        border-radius: 20px;
-        padding: 20px 10px;
-        text-align: center;
-        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
-        border: 1px solid #2f7a5a;
-    }
+    .stat-card { background: linear-gradient(145deg, #15382b, #0c231a); color: white; border-radius: 20px; padding: 20px 10px; text-align: center; box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5); border: 1px solid #2f7a5a; }
     .stat-number { font-size: 40px; font-weight: 800; color: #b0f0c0; margin-bottom: 5px; }
     .stat-label { font-size: 15px; font-weight: 500; color: #c0e0d0; }
     
-    /* صناديق الترحيب والمعلومات */
-    .welcome-box {
-        background: linear-gradient(145deg, #1a5a44, #0e3628);
-        color: white;
-        padding: 20px;
-        border-radius: 20px;
-        margin-bottom: 20px;
-        text-align: center;
-        box-shadow: 0 8px 20px rgba(0,0,0,0.4);
-        border: 1px solid #3fa07c;
-    }
-    .info-box {
-        background: #163f31;
-        border-right: 6px solid #40c090;
-        padding: 15px 20px;
-        border-radius: 16px;
-        margin-bottom: 20px;
-        color: #e0f5e8 !important;
-        font-weight: 500;
-    }
+    .welcome-box { background: linear-gradient(145deg, #1a5a44, #0e3628); color: white; padding: 20px; border-radius: 20px; margin-bottom: 20px; text-align: center; box-shadow: 0 8px 20px rgba(0,0,0,0.4); border: 1px solid #3fa07c; }
+    .info-box { background: #163f31; border-right: 6px solid #40c090; padding: 15px 20px; border-radius: 16px; margin-bottom: 20px; color: #e0f5e8 !important; font-weight: 500; }
     
-    /* الأزرار العامة */
-    .stButton > button {
-        background: linear-gradient(145deg, #1f6e54, #144d3a);
-        color: white;
-        border: none;
-        border-radius: 14px;
-        padding: 12px 25px;
-        font-size: 16px;
-        font-weight: 600;
-        width: 100%;
-        box-shadow: 0 6px 15px rgba(0, 20, 0, 0.5);
-        border: 1px solid #3da07a;
-        transition: all 0.2s;
-    }
-    .stButton > button:hover {
-        background: #2a8f6a;
-        transform: translateY(-2px);
-        box-shadow: 0 10px 25px rgba(40, 180, 120, 0.4);
-    }
+    .stButton > button { background: linear-gradient(145deg, #1f6e54, #144d3a); color: white; border: none; border-radius: 14px; padding: 12px 25px; font-size: 16px; font-weight: 600; width: 100%; box-shadow: 0 6px 15px rgba(0, 20, 0, 0.5); border: 1px solid #3da07a; transition: all 0.2s; }
+    .stButton > button:hover { background: #2a8f6a; transform: translateY(-2px); box-shadow: 0 10px 25px rgba(40, 180, 120, 0.4); }
     
-    /* حقول الإدخال */
-    .stTextInput > div > div > input {
-        border-radius: 14px;
-        border: 1.5px solid #2e7a5c;
-        padding: 12px 15px;
-        text-align: right;
-        background: #0f2b20;
-        color: #f0faf0;
-    }
-    .stTextInput > div > div > input:focus {
-        border-color: #50d0a0;
-        box-shadow: 0 0 0 3px rgba(80, 200, 150, 0.3);
-    }
+    .stTextInput > div > div > input { border-radius: 14px; border: 1.5px solid #2e7a5c; padding: 12px 15px; text-align: right; background: #0f2b20; color: #f0faf0; }
+    .stTextInput > div > div > input:focus { border-color: #50d0a0; box-shadow: 0 0 0 3px rgba(80, 200, 150, 0.3); }
     
-    /* التبويبات */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
-    .stTabs [data-baseweb="tab"] {
-        background: #13382a;
-        border-radius: 16px 16px 0 0;
-        padding: 10px 22px;
-        color: #c8e8d8;
-        border: 1px solid #2f785a;
-        border-bottom: none;
-        font-weight: 600;
-    }
-    .stTabs [aria-selected="true"] {
-        background: #1f6e54 !important;
-        color: white !important;
-        border-color: #50c898;
-    }
+    .stTabs [data-baseweb="tab"] { background: #13382a; border-radius: 16px 16px 0 0; padding: 10px 22px; color: #c8e8d8; border: 1px solid #2f785a; border-bottom: none; font-weight: 600; }
+    .stTabs [aria-selected="true"] { background: #1f6e54 !important; color: white !important; border-color: #50c898; }
     
-    /* معلومات المستخدم */
-    .user-info {
-        color: #e0f0e4;
-        font-size: 16px;
-        font-weight: 600;
-        padding: 10px 0;
-        text-align: center;
-        background: rgba(20, 60, 45, 0.6);
-        backdrop-filter: blur(5px);
-        border-radius: 30px;
-        border: 1px solid #3d8e6e;
-    }
-    
-    /* جداول البيانات */
-    .stDataFrame {
-        border-radius: 18px;
-        border: 1px solid #2f785a;
-        overflow: hidden;
-        background: #0a1f16;
-    }
-    
-    /* تحسين العناوين */
-    h1, h2, h3, h4, h5, h6 {
-        color: #c0f0d0 !important;
-    }
-    p, span, div {
-        color: #d0e8dc;
-    }
+    .user-info { color: #e0f0e4; font-size: 16px; font-weight: 600; padding: 10px 0; text-align: center; background: rgba(20, 60, 45, 0.6); backdrop-filter: blur(5px); border-radius: 30px; border: 1px solid #3d8e6e; }
+    .stDataFrame { border-radius: 18px; border: 1px solid #2f785a; overflow: hidden; background: #0a1f16; }
+    h1, h2, h3, h4, h5, h6 { color: #c0f0d0 !important; }
+    p, span, div { color: #d0e8dc; }
 </style>
 """, unsafe_allow_html=True)
 
 # =============================================================================
-# شريط التنقل (مع شعار)
+# شريط التنقل
 # =============================================================================
 def navigation_bar():
-    """عرض شريط التنقل العلوي مع أزرار الصفحات ومعلومات المستخدم."""
     col_logo, col_title, col_user = st.columns([0.7, 2.5, 1.2])
     with col_logo:
         st.markdown(get_logo_html(50), unsafe_allow_html=True)
@@ -845,7 +653,6 @@ def navigation_bar():
 # صفحة المصادقة المالية
 # =============================================================================
 def finance_auth_wall():
-    """صفحة إدخال كلمة المرور للوصول إلى التقارير المالية."""
     st.markdown("## 🔐 المصادقة المطلوبة")
     st.markdown("الرجاء إدخال كلمة المرور للوصول إلى التقارير المالية.")
     password = st.text_input("كلمة المرور", type="password", key="finance_pass_input")
@@ -992,6 +799,7 @@ def coach_subscriptions_payments_page():
     st.markdown("# 💳 الاشتراكات والمدفوعات")
     tab1, tab2, tab3, tab4 = st.tabs(["➕ تسجيل اشتراك جديد", "✏️ تعديل اشتراك", "💰 إدارة المدفوعات", "📋 عرض الاشتراكات"])
 
+    # --- تبويب تسجيل جديد (بدون تغيير) ---
     with tab1:
         st.markdown("### ➕ تسجيل اشتراك جديد (مع دفعة أولى)")
         users = get_all_users()
@@ -1026,50 +834,63 @@ def coach_subscriptions_payments_page():
                     else:
                         st.error(msg)
 
+    # --- تبويب تعديل اشتراك (مع تصنيف حسب الدفع) ---
     with tab2:
         st.markdown("### ✏️ تعديل بيانات الاشتراك")
         finance_records = get_all_finance()
         if not finance_records:
             st.info("لا توجد اشتراكات")
         else:
-            players = [f["player_name"] for f in finance_records]
-            sel = st.selectbox("اختر اللاعب", players, key="edit_finance_player")
-            current = next((f for f in finance_records if f["player_name"]==sel), None)
-            if current:
-                c1, c2 = st.columns(2)
-                with c1: fee = st.number_input("قيمة الاشتراك", value=float(current.get("season_fee",0)), step=50.0, key="edit_fee")
-                with c2:
-                    opts = ["Active","Expired","Suspended"]
-                    idx = opts.index(current.get("subscription_status","Active")) if current.get("subscription_status","Active") in opts else 0
-                    status = st.selectbox("الحالة", opts, index=idx, format_func=lambda x: "🟢 نشط" if x=="Active" else ("🔴 منتهي" if x=="Expired" else "🟡 معلق"), key="edit_status")
-                c3, c4 = st.columns(2)
-                with c3:
-                    dstart = datetime.strptime(current.get("start_date", date.today().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
-                    start = st.date_input("بداية الموسم", value=dstart, key="edit_start")
-                with c4:
-                    dend = datetime.strptime(current.get("end_date", (date.today()+timedelta(days=90)).strftime("%Y-%m-%d")), "%Y-%m-%d").date()
-                    end = st.date_input("نهاية الموسم", value=dend, key="edit_end")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("📝 تحديث الاشتراك", key="btn_update_finance"):
-                        success, msg = add_or_update_finance_record(sel, fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), status, 0)
-                        if success:
-                            st.success("✅ تم تحديث الاشتراك بنجاح!")
-                            st.toast("✅ تم تحديث الاشتراك!", icon="✏️")
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                with col2:
-                    if st.button("🗑️ حذف الاشتراك", key="btn_delete_finance"):
-                        if delete_finance_record(sel):
-                            st.success("✅ تم حذف الاشتراك بنجاح!")
-                            st.toast("✅ تم حذف الاشتراك!", icon="🗑️")
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error("❌ فشل حذف الاشتراك")
+            # بناء قائمة اللاعبين مع حالة الدفع
+            all_players = [f["player_name"] for f in finance_records]
+            # إضافة فلتر
+            payment_filter = st.selectbox("تصنيف حسب حالة الدفع", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"], key="edit_filter")
+            filtered_players = []
+            for p in all_players:
+                status = get_player_payment_status(p)
+                if payment_filter == "الكل" or status == payment_filter:
+                    filtered_players.append(p)
+            if not filtered_players:
+                st.info("لا يوجد لاعبين مطابقين للتصنيف المحدد.")
+            else:
+                sel = st.selectbox("اختر اللاعب", filtered_players, key="edit_finance_player")
+                current = next((f for f in finance_records if f["player_name"]==sel), None)
+                if current:
+                    c1, c2 = st.columns(2)
+                    with c1: fee = st.number_input("قيمة الاشتراك", value=float(current.get("season_fee",0)), step=50.0, key="edit_fee")
+                    with c2:
+                        opts = ["Active","Expired","Suspended"]
+                        idx = opts.index(current.get("subscription_status","Active")) if current.get("subscription_status","Active") in opts else 0
+                        status = st.selectbox("الحالة", opts, index=idx, format_func=lambda x: "🟢 نشط" if x=="Active" else ("🔴 منتهي" if x=="Expired" else "🟡 معلق"), key="edit_status")
+                    c3, c4 = st.columns(2)
+                    with c3:
+                        dstart = datetime.strptime(current.get("start_date", date.today().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+                        start = st.date_input("بداية الموسم", value=dstart, key="edit_start")
+                    with c4:
+                        dend = datetime.strptime(current.get("end_date", (date.today()+timedelta(days=90)).strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+                        end = st.date_input("نهاية الموسم", value=dend, key="edit_end")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("📝 تحديث الاشتراك", key="btn_update_finance"):
+                            success, msg = add_or_update_finance_record(sel, fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), status, 0)
+                            if success:
+                                st.success("✅ تم تحديث الاشتراك بنجاح!")
+                                st.toast("✅ تم تحديث الاشتراك!", icon="✏️")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with col2:
+                        if st.button("🗑️ حذف الاشتراك", key="btn_delete_finance"):
+                            if delete_finance_record(sel):
+                                st.success("✅ تم حذف الاشتراك بنجاح!")
+                                st.toast("✅ تم حذف الاشتراك!", icon="🗑️")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ فشل حذف الاشتراك")
 
+    # --- تبويب إدارة المدفوعات (مع تصنيف) ---
     with tab3:
         st.markdown("### 💰 إدارة المدفوعات (تعديل / حذف)")
         payments = get_all_payments()
@@ -1077,17 +898,32 @@ def coach_subscriptions_payments_page():
             st.info("لا توجد مدفوعات مسجلة")
         else:
             df = pd.DataFrame(payments)
+            # إضافة عمود row_index (رقم الصف في الجدول للاستخدام في التعديل/الحذف)
             df["row_index"] = range(2, len(payments)+2)
-            df_display = df.rename(columns={"player_name":"اللاعب","amount":"المبلغ","payment_method":"الطريقة","payment_date":"التاريخ","notes":"ملاحظات"})
-            st.dataframe(df_display[["row_index","اللاعب","المبلغ","الطريقة","التاريخ","ملاحظات"]], use_container_width=True, hide_index=True)
+            # إضافة حالة الدفع لكل لاعب
+            df["payment_status"] = df["player_name"].apply(get_player_payment_status)
+            df_display = df.rename(columns={
+                "player_name": "اللاعب",
+                "amount": "المبلغ",
+                "payment_method": "الطريقة",
+                "payment_date": "التاريخ",
+                "notes": "ملاحظات",
+                "payment_status": "حالة الدفع"
+            })
+            # فلتر
+            filter_payment = st.selectbox("تصنيف حسب حالة الدفع", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"], key="payment_filter")
+            if filter_payment != "الكل":
+                df_display = df_display[df_display["حالة الدفع"] == filter_payment]
+            st.dataframe(df_display[["row_index","اللاعب","المبلغ","الطريقة","التاريخ","ملاحظات","حالة الدفع"]], use_container_width=True, hide_index=True)
 
             st.markdown("---")
             st.markdown("#### تعديل دفعة")
             row_num = st.number_input("أدخل رقم الصف (row_index) للتعديل", min_value=2, step=1, key="edit_row")
+            # البحث في df الأصلي (غير المفلتر) للعثور على الصف
             selected_row = df[df["row_index"]==row_num]
             if not selected_row.empty:
                 row = selected_row.iloc[0]
-                st.write(f"اللاعب: {row['player_name']} | المبلغ الحالي: {row['amount']}")
+                st.write(f"اللاعب: {row['player_name']} | المبلغ الحالي: {row['amount']} | حالة الدفع: {get_player_payment_status(row['player_name'])}")
                 new_amt = st.number_input("المبلغ الجديد", value=float(row['amount']), step=50.0, key="edit_payment_amt")
                 new_method = st.selectbox("طريقة الدفع", ["Cash","InstaPay","Vodafone Cash","Bank Transfer","Other"], index=["Cash","InstaPay","Vodafone Cash","Bank Transfer","Other"].index(row['payment_method']) if row['payment_method'] in ["Cash","InstaPay","Vodafone Cash","Bank Transfer","Other"] else 0, key="edit_payment_method")
                 new_date = st.date_input("تاريخ الدفع", value=datetime.strptime(row['payment_date'], "%Y-%m-%d").date(), key="edit_payment_date")
@@ -1116,19 +952,27 @@ def coach_subscriptions_payments_page():
             else:
                 st.warning("رقم الصف غير موجود")
 
+    # --- تبويب عرض الاشتراكات (مع تصنيف) ---
     with tab4:
         st.markdown("### 📋 الاشتراكات المسجلة")
         finance = get_all_finance()
         if finance:
             df = pd.DataFrame(finance)
             df = df.rename(columns={"player_name":"اللاعب","season_fee":"القيمة","start_date":"بداية","end_date":"نهاية","subscription_status":"الحالة","total_paid":"المدفوع"})
+            # حساب المتبقي وحالة الدفع
+            df["المدفوع"] = df["اللاعب"].apply(calculate_total_paid_from_payments)
             df["المتبقي"] = df.apply(lambda r: max(0, float(r["القيمة"]) - float(r["المدفوع"])), axis=1)
+            df["حالة الدفع"] = df["اللاعب"].apply(get_player_payment_status)
+            # فلتر
+            sub_filter = st.selectbox("تصنيف حسب حالة الدفع", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"], key="sub_filter")
+            if sub_filter != "الكل":
+                df = df[df["حالة الدفع"] == sub_filter]
             def status_color(s):
                 if s=="Active": return "🟢 نشط"
                 elif s=="Expired": return "🔴 منتهي"
                 else: return "🟡 معلق"
             df["الحالة"] = df["الحالة"].apply(status_color)
-            st.dataframe(df[["اللاعب","القيمة","المدفوع","المتبقي","بداية","نهاية","الحالة"]], use_container_width=True, hide_index=True)
+            st.dataframe(df[["اللاعب","القيمة","المدفوع","المتبقي","بداية","نهاية","الحالة","حالة الدفع"]], use_container_width=True, hide_index=True)
         else:
             st.info("لا توجد اشتراكات")
 
@@ -1254,7 +1098,7 @@ def player_subscription_page():
         st.write(f"الحالة: {'🟢 نشط' if sub.get('subscription_status')=='Active' else '🔴 غير نشط'}")
 
 # =============================================================================
-# صفحة تسجيل الدخول (مع شعار في المنتصف)
+# صفحة تسجيل الدخول
 # =============================================================================
 def login_page():
     coach_exists = check_coach_exists()
@@ -1320,15 +1164,10 @@ def login_page():
 # الدالة الرئيسية
 # =============================================================================
 def main():
-    # تهيئة الجلسة مع الحفاظ على القيم الموجودة
     init_session()
-    
-    # تهيئة الأوراق إذا لم تكن قد تمت بالفعل
     if not st.session_state.sheets_initialized:
         if init_sheets():
             st.session_state.sheets_initialized = True
-    
-    # التحقق من حالة تسجيل الدخول
     if not st.session_state.logged_in:
         login_page()
     else:
