@@ -3,6 +3,7 @@
 =====================================================
 يدعم استيراد لاعبين جدد من ملف خارجي (Google Sheets) مع كلمة مرور تلقائية.
 جميع العمليات الأساسية (حضور، اشتراكات، مدفوعات) تتم على الملف الأساسي فقط.
+تم إضافة حقل 'الفئة العمرية' إلى بيانات المستخدمين.
 """
 
 import streamlit as st
@@ -32,6 +33,7 @@ st.set_page_config(
 # دالة عرض الشعار
 # =============================================================================
 def get_logo_html(width=50):
+    """عرض الشعار أو أيقونة بديلة."""
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
         try:
@@ -47,6 +49,7 @@ def get_logo_html(width=50):
 # دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
 def retry_on_quota(func, max_retries=5, delay=3.0):
+    """إعادة المحاولة عند تجاوز حصة Google Sheets (429)."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -61,14 +64,16 @@ def retry_on_quota(func, max_retries=5, delay=3.0):
     return wrapper
 
 def generate_random_password(length=6):
+    """توليد كلمة مرور عشوائية مكونة من حروف وأرقام."""
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
 # =============================================================================
-# إعداد Google Sheets (الملف الأساسي + الملف الخارجي)
+# دوال الاتصال بـ Google Sheets (الملف الأساسي + الملف الخارجي)
 # =============================================================================
 @st.cache_resource
 def get_google_sheets_client():
+    """إنشاء عميل Google Sheets للملف الأساسي."""
     try:
         cred_section = st.secrets["google"]["service_account"]
         credentials_dict = {
@@ -100,8 +105,19 @@ def get_google_sheets_client():
         st.error(f"❌ خطأ في الاتصال بالملف الأساسي: {str(e)}")
         return None, None
 
+def has_external_sheet_config():
+    """التحقق من وجود إعدادات الملف الخارجي في secrets."""
+    try:
+        _ = st.secrets["external_sheet"]
+        return True
+    except KeyError:
+        return False
+
 @st.cache_resource
 def get_external_sheets_client():
+    """إنشاء عميل Google Sheets للملف الخارجي (إن وجد)."""
+    if not has_external_sheet_config():
+        return None, None
     try:
         cred_section = st.secrets["external_sheet"]["service_account"]
         credentials_dict = {
@@ -135,6 +151,7 @@ def get_external_sheets_client():
 
 @st.cache_resource
 def get_workbook():
+    """فتح الملف الأساسي."""
     client, spreadsheet_id = get_google_sheets_client()
     if client and spreadsheet_id:
         try:
@@ -145,6 +162,7 @@ def get_workbook():
 
 @st.cache_resource
 def get_external_workbook():
+    """فتح الملف الخارجي (إن وجد)."""
     client, spreadsheet_id = get_external_sheets_client()
     if client and spreadsheet_id:
         try:
@@ -155,6 +173,7 @@ def get_external_workbook():
 
 @st.cache_resource
 def get_worksheet(sheet_name, external=False):
+    """الحصول على ورقة من الملف الأساسي أو الخارجي."""
     workbook = get_external_workbook() if external else get_workbook()
     if workbook:
         try:
@@ -168,16 +187,16 @@ def get_worksheet(sheet_name, external=False):
 
 def init_sheets():
     """
-    تهيئة أوراق الملف الأساسي (Users, Attendance, Finance, Payments).
-    Attendance بـ 50000 صف، والباقي بـ 1000 صف.
+    تهيئة أوراق الملف الأساسي.
+    Users الآن تحتوي على عمود 'age_group' (الفئة العمرية).
     """
     workbook = get_workbook()
     if not workbook:
         return False
 
-    # تعريف الأوراق المطلوبة كـ dict بسيط: اسم الورقة -> (عنوان الورقة, العناوين, عدد الصفوف)
+    # تعريف الأوراق المطلوبة: اسم الورقة -> (عنوان الورقة, العناوين, عدد الصفوف)
     required = {
-        "Users": ("Users", ["username", "password", "role", "created_at"], 1000),
+        "Users": ("Users", ["username", "password", "role", "age_group", "created_at"], 1000),
         "Attendance": ("Attendance", ["player_name", "date", "status", "recorded_by", "created_at"], 50000),
         "Finance": ("Finance", ["player_name", "season_fee", "start_date", "end_date",
                                 "subscription_status", "total_paid", "last_payment_date", "updated_at"], 1000),
@@ -194,9 +213,10 @@ def init_sheets():
         else:
             sheet = existing_sheets[sheet_key]
             existing_headers = sheet.row_values(1)
-            if not existing_headers or existing_headers != headers:
-                sheet.clear()
-                sheet.append_row(headers)
+            # إذا اختلفت العناوين، ندمج الأعمدة الجديدة (مثل age_group) دون مسح البيانات
+            if set(existing_headers) != set(headers):
+                # نحتاج إلى تحديث الصف الأول بالعناوين الجديدة
+                sheet.update('A1', [headers])
             # توسيع الورقة إذا لزم الأمر
             current_rows = sheet.row_count
             if current_rows < rows_needed:
@@ -210,6 +230,7 @@ def init_sheets():
 # =============================================================================
 @retry_on_quota
 def _get_all_records_safe(sheet_name, external=False):
+    """قراءة جميع السجلات من ورقة معينة."""
     sheet = get_worksheet(sheet_name, external)
     if sheet:
         try:
@@ -236,6 +257,7 @@ def get_payments_sheet_data():
     return _get_all_records_safe("Payments")
 
 def clean_records(records):
+    """تنظيف السجلات بإزالة المسافات الزائدة."""
     cleaned = []
     for row in records:
         cleaned_row = {}
@@ -260,41 +282,49 @@ def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
-# استيراد اللاعبين من الملف الخارجي
+# استيراد اللاعبين من الملف الخارجي (إذا كان مهيأ)
 # =============================================================================
 def import_players_from_external():
+    """
+    قراءة الأسماء والفئات العمرية من الملف الخارجي وإضافتهم إلى Users الأساسي
+    إذا لم يكونوا مسجلين بالفعل، مع كلمة مرور عشوائية وحفظ الفئة العمرية.
+    """
+    if not has_external_sheet_config():
+        return False, "لم يتم إعداد الملف الخارجي في secrets.toml. أضف قسم [external_sheet] للمزامنة."
+
     try:
         cfg = st.secrets["external_sheet"]
-        sheet_name = cfg["worksheet_name"]
-        name_col = cfg["name_column"]
-        group_col = cfg["group_column"]
+        sheet_name = cfg.get("worksheet_name", "Players")
+        name_col = cfg.get("name_column", "الاسم")
+        group_col = cfg.get("group_column", "الفئة العمرية")
     except Exception as e:
         return False, f"خطأ في قراءة إعدادات الملف الخارجي: {e}"
 
     external_data = _get_all_records_safe(sheet_name, external=True)
     if not external_data:
-        return False, "لم يتم العثور على بيانات في الملف الخارجي."
+        return False, "لم يتم العثور على بيانات في الملف الخارجي. تأكد من وجود الورقة والبيانات."
 
     current_users = {u["username"] for u in get_all_users()}
     new_players = []
     for row in external_data:
         name = row.get(name_col, "").strip()
-        group = row.get(group_col, "").strip()
+        age_group = row.get(group_col, "").strip()
         if not name:
             continue
         if name in current_users:
             continue
-        new_players.append((name, group))
+        new_players.append((name, age_group))
 
     if not new_players:
         return True, "جميع اللاعبين مسجلين بالفعل."
 
     added = 0
-    for name, group in new_players:
+    for name, age_group in new_players:
         password = generate_random_password()
         role = "player"
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if append_row_to_sheet("Users", [name, password, role, created_at]):
+        # الآن نضيف age_group كعمود رابع
+        if append_row_to_sheet("Users", [name, password, role, age_group, created_at]):
             added += 1
 
     return True, f"تم استيراد {added} لاعب جديد بنجاح (مع كلمات مرور عشوائية)."
@@ -304,6 +334,7 @@ def import_players_from_external():
 # =============================================================================
 @retry_on_quota
 def append_row_to_sheet(sheet_name, row_data):
+    """إضافة صف جديد إلى نهاية الورقة."""
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
@@ -320,6 +351,7 @@ def append_row_to_sheet(sheet_name, row_data):
 
 @retry_on_quota
 def append_rows_to_sheet(sheet_name, rows_data):
+    """إضافة عدة صفوف دفعة واحدة."""
     if not rows_data:
         return True
     sheet = get_worksheet(sheet_name)
@@ -338,6 +370,7 @@ def append_rows_to_sheet(sheet_name, rows_data):
 
 @retry_on_quota
 def update_cell_in_sheet(sheet_name, row, col, value):
+    """تحديث قيمة خلية محددة."""
     sheet = get_worksheet(sheet_name)
     if sheet is None:
         init_sheets()
@@ -354,6 +387,7 @@ def update_cell_in_sheet(sheet_name, row, col, value):
 
 @retry_on_quota
 def delete_row_from_sheet(sheet_name, row_index):
+    """حذف صف كامل من الورقة."""
     sheet = get_worksheet(sheet_name)
     if sheet:
         try:
@@ -366,9 +400,10 @@ def delete_row_from_sheet(sheet_name, row_index):
     return False
 
 # =============================================================================
-# دوال المستخدمين
+# دوال المستخدمين (معدلة لتشمل الفئة العمرية)
 # =============================================================================
 def get_user(username: str):
+    """البحث عن مستخدم بالاسم."""
     users = get_all_users()
     username_clean = username.strip() if username else ""
     for user in users:
@@ -377,23 +412,27 @@ def get_user(username: str):
     return None
 
 def check_coach_exists():
+    """التحقق من وجود كابتن واحد على الأقل."""
     users = get_all_users()
     for user in users:
         if user.get("role", "").strip() == "coach":
             return True
     return False
 
-def add_user(username: str, password: str, role: str = "player"):
+def add_user(username: str, password: str, role: str = "player", age_group: str = ""):
+    """إضافة مستخدم جديد مع الفئة العمرية."""
     username = username.strip() if username else ""
     password = password.strip() if password else ""
     if get_user(username):
         return False, "اسم المستخدم موجود بالفعل"
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if append_row_to_sheet("Users", [username, password, role, created_at]):
+    # ترتيب الأعمدة: username, password, role, age_group, created_at
+    if append_row_to_sheet("Users", [username, password, role, age_group.strip(), created_at]):
         return True, f"تم إضافة المستخدم بنجاح كـ {'كابتن' if role == 'coach' else 'لاعب'}"
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def validate_triple_name(name: str) -> bool:
+    """التحقق من أن الاسم ثلاثي عربي."""
     if not name or not isinstance(name, str):
         return False
     name = name.strip()
@@ -411,6 +450,7 @@ def validate_triple_name(name: str) -> bool:
 # دوال الحضور (مع منع التكرار وكتابة مجمعة)
 # =============================================================================
 def is_attendance_recorded_today(player_name: str) -> bool:
+    """التحقق من تسجيل اللاعب اليوم."""
     today = datetime.now().strftime("%Y-%m-%d")
     records = get_all_attendance()
     for r in records:
@@ -419,6 +459,7 @@ def is_attendance_recorded_today(player_name: str) -> bool:
     return False
 
 def record_attendance(player_name: str, status: str, recorded_by: str):
+    """تسجيل حضور أو غياب فردي."""
     if is_attendance_recorded_today(player_name):
         return False, f"تم تسجيل حالة للاعب {player_name} مسبقاً اليوم. لا يمكن التسجيل مرة أخرى."
     today = datetime.now().strftime("%Y-%m-%d")
@@ -428,6 +469,7 @@ def record_attendance(player_name: str, status: str, recorded_by: str):
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
+    """تسجيل حضور/غياب لمجموعة لاعبين دفعة واحدة."""
     today = datetime.now().strftime("%Y-%m-%d")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
@@ -454,10 +496,12 @@ def record_multiple_attendance(player_names: list, status: str, recorded_by: str
     return True, msg
 
 def get_player_attendance(player_name: str):
+    """جلب سجل حضور لاعب."""
     records = get_all_attendance()
     return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
 
 def get_attendance_stats(player_name: str):
+    """إحصائيات الحضور للاعب."""
     records = get_player_attendance(player_name)
     if not records:
         return {"total": 0, "present": 0, "absent": 0, "percentage": 0}
@@ -468,6 +512,7 @@ def get_attendance_stats(player_name: str):
     return {"total": total, "present": present, "absent": absent, "percentage": round(percentage, 1)}
 
 def get_today_attendance():
+    """حضور اليوم فقط."""
     today = datetime.now().strftime("%Y-%m-%d")
     records = get_all_attendance()
     return [r for r in records if r.get("date") == today]
@@ -1069,8 +1114,8 @@ def coach_subscriptions_payments_page():
 def coach_players_page():
     st.markdown("# 👥 إدارة اللاعبين")
     
-    col_sync1, col_sync2 = st.columns(2)
-    with col_sync1:
+    # زر المزامنة يظهر فقط إذا كانت إعدادات الملف الخارجي موجودة
+    if has_external_sheet_config():
         if st.button("🔄 مزامنة اللاعبين من الملف الخارجي", use_container_width=True):
             success, msg = import_players_from_external()
             if success:
@@ -1080,10 +1125,9 @@ def coach_players_page():
                 st.rerun()
             else:
                 st.error(msg)
-    with col_sync2:
-        if st.button("📋 عرض اللاعبين الحاليين", use_container_width=True):
-            pass
-
+    else:
+        st.info("ℹ️ لإضافة لاعبين من ملف خارجي، قم بإعداد [external_sheet] في secrets.toml.")
+    
     st.markdown("---")
     
     users = get_all_users()
@@ -1094,10 +1138,12 @@ def coach_players_page():
     data = []
     for p in players:
         name = p["username"].strip()
+        age_group = p.get("age_group", "")
         stats = get_attendance_stats(name)
         sub = get_player_finance(name)
         data.append({
             "اللاعب": name,
+            "الفئة العمرية": age_group,
             "نسبة الحضور": f"{stats['percentage']}%",
             "الاشتراك": "🟢 نشط" if sub and sub.get("subscription_status")=="Active" else "🔴 غير نشط"
         })
@@ -1243,7 +1289,8 @@ def login_page():
             elif len(new_pass) < 6:
                 st.error("كلمة المرور يجب أن تكون 6 أحرف على الأقل")
             else:
-                success, msg = add_user(new_user, new_pass, role_for_new)
+                # يمكنك ترك حقل الفئة العمرية فارغاً عند التسجيل اليدوي
+                success, msg = add_user(new_user, new_pass, role_for_new, age_group="")
                 if success:
                     st.success(msg)
                     st.toast("✅ تم إنشاء الحساب بنجاح!", icon="🎉")
