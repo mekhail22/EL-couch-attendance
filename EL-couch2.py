@@ -1,1781 +1,1484 @@
+"""
+نظام الكوتش أكاديمي - إدارة الحضور والاشتراكات الموسمية
+=====================================================
+- ثلاث فئات عمرية ثابتة: بنات (جميع الأعمار)، بنين ابتدائي، بنين إعدادي.
+- حضور/غياب لكل فئة مع تسجيل جماعي وفردي.
+- سجل حضور منظم + إحصائيات عامة وإحصائيات لكل فئة.
+- حماية إدارة اللاعبين والتقارير المالية بكلمة مرور واحدة.
+- عرض كلمات مرور اللاعبين في صفحة إدارة اللاعبين.
+"""
+
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime, date, timedelta
+import pandas as pd
+import re
 import os
 import base64
-import re
-from datetime import datetime
-import requests
-import threading
 import time
+import random
+import string
+from functools import wraps
 
-# ====================================================================================================
-# إعدادات الحد الأقصى
-# ====================================================================================================
-MAX_PLAYERS = 50
-
-# ====================================================================================================
-# إعدادات قاعدة بيانات Firestore (الدرع الواقي)
-# ====================================================================================================
-FIRESTORE_DATABASE = "coach-registrations"
-
-# ====================================================================================================
-# Firestore Client (مع معالجة آمنة للأخطاء)
-# ====================================================================================================
-db = None
-firestore_available = False
-
-@st.cache_resource
-def init_firestore():
-    """إنشاء عميل Firestore مع اختبار الاتصال الفعلي"""
-    try:
-        from google.cloud import firestore as fs
-        from google.oauth2 import service_account
-
-        creds_info = dict(st.secrets["google"]["service_account"])
-        credentials = service_account.Credentials.from_service_account_info(creds_info)
-        client_kwargs = {
-            "project": creds_info["project_id"],
-            "credentials": credentials,
-        }
-        if FIRESTORE_DATABASE and FIRESTORE_DATABASE.strip() not in ["", "(default)"]:
-            client_kwargs["database"] = FIRESTORE_DATABASE
-
-        client = fs.Client(**client_kwargs)
-        client.collection("counters").document("test").get()
-        return client
-    except Exception as e:
-        print(f"[Firestore Init] غير متاح: {str(e)}")
-        return None
-
-try:
-    db = init_firestore()
-    if db is not None:
-        firestore_available = True
-        print("[Firestore] متصل وجاهز")
-except Exception:
-    db = None
-    firestore_available = False
-
-# ====================================================================================================
-# Google Sheets Helper (مصدر الحقيقة النهائي)
-# ====================================================================================================
-def get_sheets_client():
-    """إنشاء عميل Google Sheets"""
-    import gspread
-    from google.oauth2.service_account import Credentials
-    creds_info = dict(st.secrets["google"]["service_account"])
-    spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    credentials = Credentials.from_service_account_info(creds_info, scopes=scopes)
-    gc = gspread.authorize(credentials)
-    return gc.open_by_key(spreadsheet_id).sheet1
-
-def get_sheets_headers(sheet):
-    """التأكد من وجود الهيدرز في Google Sheets"""
-    headers = sheet.row_values(1)
-    expected_headers = ["الاسم", "الفئة العمرية", "المركز المفضل", "رقم الهاتف", "ملاحظات", "تاريخ التسجيل"]
-    if not headers:
-        sheet.append_row(expected_headers, value_input_option="USER_ENTERED")
-        return expected_headers
-    else:
-        for h in expected_headers:
-            if h not in headers:
-                col_index = len(headers) + 1
-                sheet.update_cell(1, col_index, h)
-                headers.append(h)
-        return headers
-
-def get_real_count_from_sheets():
-    """قراءة العدد الحقيقي من Google Sheets"""
-    try:
-        sheet = get_sheets_client()
-        all_rows = sheet.get_all_values()
-        return max(0, len(all_rows) - 1)
-    except Exception as e:
-        print(f"[Sheets Count Error] {str(e)}")
-        return 0
-
-# ====================================================================================================
-# عداد اللاعبين (Firestore أولاً، fallback على Sheets)
-# ====================================================================================================
-def get_player_count():
-    """يقرأ العدد من Firestore (سريع). لو واقف، يقرأ من Sheets."""
-    if firestore_available and db is not None:
-        try:
-            doc = db.collection("counters").document("player_count").get()
-            if doc.exists:
-                count = doc.to_dict().get("count", 0)
-                if count > 0:
-                    return count
-        except Exception as e:
-            print(f"[Firestore Count Error] {str(e)}")
-    return get_real_count_from_sheets()
-
-def increment_firestore_counter():
-    """زيادة العداد في Firestore بشكل ذري"""
-    if firestore_available and db is not None:
-        try:
-            from google.cloud import firestore as fs
-            db.collection("counters").document("player_count").set(
-                {"count": fs.Increment(1)}, merge=True
-            )
-        except Exception as e:
-            print(f"[Firestore Increment Error] {str(e)}")
-
-# ====================================================================================================
-# التحقق من التكرار في Firestore (سريع جداً)
-# ====================================================================================================
-def check_duplicate_in_firestore(data_dict):
-    """يبحث في Firestore عن نفس الاسم + رقم التليفون."""
-    if not firestore_available or db is None:
-        return False
-    try:
-        player_name = data_dict.get('player_name', '').strip()
-        if not player_name:
-            return False
-        docs = db.collection("registrations").where("player_name", "==", player_name).limit(5).stream()
-        for doc in docs:
-            data = doc.to_dict()
-            existing_phone = normalize_phone(data.get('parent_phone', '')).lstrip("'")
-            new_phone = normalize_phone(data_dict.get('parent_phone', '')).lstrip("'")
-            if existing_phone == new_phone:
-                return True
-        return False
-    except Exception as e:
-        print(f"[Firestore Dup Check Error] {str(e)}")
-        return False
-
-# ====================================================================================================
-# حفظ التسجيل في Firestore (الدرع الواقي - فوري)
-# ====================================================================================================
-def save_to_firestore(data_dict):
-    """يكتب في Firestore فوراً ويرجع نجاح."""
-    if not firestore_available or db is None:
-        return False, "Firestore غير متاح"
-    try:
-        from google.cloud import firestore as fs
-        db.collection("registrations").add({
-            "player_name": data_dict["player_name"],
-            "age_group": data_dict["age_group"],
-            "position": data_dict["position"],
-            "parent_phone": data_dict["parent_phone"],
-            "notes": data_dict.get("notes", ""),
-            "timestamp": fs.SERVER_TIMESTAMP,
-            "processed": False
-        })
-        increment_firestore_counter()
-        return True, "تم التسجيل بنجاح!"
-    except Exception as e:
-        print(f"[Firestore Save Error] {str(e)}")
-        return False, str(e)
-
-# ====================================================================================================
-# Google Sheets (المعالجة الخلفية البطيئة)
-# ====================================================================================================
-def normalize_phone(phone):
-    if not phone:
-        return ''
-    arabic_to_english = str.maketrans('٠١٢٣٤٥٦٧٨٩', '0123456789')
-    phone = phone.translate(arabic_to_english)
-    phone = re.sub(r'[^0-9]', '', phone)
-    return "'" + phone
-
-def check_duplicate_in_sheets(sheet, headers, data_dict):
-    """التحقق النهائي من التكرار في Google Sheets"""
-    try:
-        name_col = headers.index("الاسم")
-        age_col = headers.index("الفئة العمرية")
-        pos_col = headers.index("المركز المفضل")
-        phone_col = headers.index("رقم الهاتف")
-    except ValueError:
-        return False
-    all_rows = sheet.get_all_values()
-    if len(all_rows) <= 1:
-        return False
-    normalized_phone = normalize_phone(data_dict.get('parent_phone', ''))
-    phone_for_comparison = normalized_phone.lstrip("'")
-    new_name = data_dict.get('player_name', '').strip()
-    new_age = data_dict.get('age_group', '').strip()
-    new_pos = data_dict.get('position', '').strip()
-    for row in all_rows[1:]:
-        if len(row) > max(name_col, age_col, pos_col, phone_col):
-            existing_name = row[name_col].strip()
-            existing_age = row[age_col].strip()
-            existing_pos = row[pos_col].strip()
-            existing_phone = row[phone_col].lstrip("'").strip()
-            if (existing_name == new_name and existing_age == new_age and 
-                existing_pos == new_pos and existing_phone == phone_for_comparison):
-                return True
-    return False
-
-def save_to_google_sheets(data_dict):
-    """الكتابة في Google Sheets (تُستدعى من الـ Worker فقط)"""
-    try:
-        sheet = get_sheets_client()
-        headers = get_sheets_headers(sheet)
-        if check_duplicate_in_sheets(sheet, headers, data_dict):
-            return False, "هذه البيانات مسجلة مسبقاً."
-        normalized_phone = normalize_phone(data_dict.get('parent_phone', ''))
-        row_values = []
-        for col in headers:
-            if col == "الاسم":
-                row_values.append(data_dict.get('player_name', ''))
-            elif col == "الفئة العمرية":
-                row_values.append(data_dict.get('age_group', ''))
-            elif col == "المركز المفضل":
-                row_values.append(data_dict.get('position', ''))
-            elif col == "رقم الهاتف":
-                row_values.append(normalized_phone)
-            elif col == "ملاحظات":
-                row_values.append(data_dict.get('notes', ''))
-            elif col == "تاريخ التسجيل":
-                row_values.append(data_dict.get('timestamp', ''))
-            else:
-                row_values.append('')
-        sheet.append_row(row_values, value_input_option="USER_ENTERED")
-        return True, "تم التسجيل في Google Sheets!"
-    except Exception as e:
-        return False, f"خطأ في Google Sheets: {str(e)}"
-
-# ====================================================================================================
-# العامل الخلفي (الحارس الأمين - ينقل من Firestore إلى Google Sheets)
-# ====================================================================================================
-def process_pending_registrations():
-    """يأخذ سجلات غير معالجة من Firestore ويكتبها في Google Sheets."""
-    if not firestore_available or db is None:
-        return
-    try:
-        docs = db.collection("registrations").where("processed", "==", False).limit(5).stream()
-        for doc in docs:
-            data = doc.to_dict()
-            gs_data = {
-                'player_name': data.get('player_name', ''),
-                'age_group': data.get('age_group', ''),
-                'position': data.get('position', ''),
-                'parent_phone': data.get('parent_phone', ''),
-                'notes': data.get('notes', ''),
-                'timestamp': data.get('timestamp', '') or ''
-            }
-            success, msg = save_to_google_sheets(gs_data)
-            if success:
-                try:
-                    doc.reference.update({"processed": True})
-                except Exception:
-                    pass
-            else:
-                print(f"[Worker] فشل نقل سجل: {msg}")
-            time.sleep(3)
-    except Exception as e:
-        print(f"[Worker Error] {str(e)}")
-
-def start_worker():
-    """تشغيل العامل الخلفي في خيط منفصل"""
-    def run():
-        while True:
-            process_pending_registrations()
-            time.sleep(30)
-    if "worker_started" not in st.session_state:
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        st.session_state.worker_started = True
-        print("[Worker] شغال")
-
-start_worker()
-
-# ====================================================================================================
-# Telegram Messaging Function
-# ====================================================================================================
-def send_telegram_message(message_text):
-    try:
-        bot_token = st.secrets["telegram"]["bot_token"]
-        chat_id = st.secrets["telegram"]["chat_id"]
-        send_message_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        params = {
-            "chat_id": chat_id,
-            "text": message_text,
-            "parse_mode": "HTML"
-        }
-        response = requests.post(send_message_url, params=params)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"[Telegram Error] {str(e)}")
-        return False
-
-# ====================================================================================================
-# Page Config & Session State
-# ====================================================================================================
+# =============================================================================
+# إعدادات الصفحة
+# =============================================================================
 st.set_page_config(
-    page_title="الكوتش أكاديمي - أكاديمية كرة القدم المتخصصة",
+    page_title="الكوتش أكاديمي",
     page_icon="⚽",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="collapsed"
 )
 
-if "page" not in st.session_state:
-    st.session_state.page = "home"
-if "show_success" not in st.session_state:
-    st.session_state.show_success = False
-if "show_contact_success" not in st.session_state:
-    st.session_state.show_contact_success = False
-if "menu_open" not in st.session_state:
-    st.session_state.menu_open = False
-if "registration_submitted" not in st.session_state:
-    st.session_state.registration_submitted = False
-if "registration_error" not in st.session_state:
-    st.session_state.registration_error = None
+# =============================================================================
+# الشعار / الأيقونة
+# =============================================================================
+def get_logo_html(width=50):
+    """إرجاع HTML لعرض الشعار logo.jpg أو أيقونة ⚽."""
+    logo_path = "logo.jpg"
+    if os.path.exists(logo_path):
+        try:
+            with open(logo_path, "rb") as f:
+                data = f.read()
+                b64 = base64.b64encode(data).decode()
+                return f'<img src="data:image/jpeg;base64,{b64}" style="width:{width}px; height:auto; border-radius:12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">'
+        except:
+            pass
+    return f'<span style="font-size:{width}px;">⚽</span>'
 
-# ====================================================================================================
-# Logo
-# ====================================================================================================
-def get_image_base64(image_path):
-    try:
-        with open(image_path, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    except Exception:
+# =============================================================================
+# أدوات مساعدة للتخزين المؤقت وإعادة المحاولة
+# =============================================================================
+def retry_on_quota(func, max_retries=5, delay=3.0):
+    """
+    إعادة محاولة تنفيذ الدالة عند حدوث خطأ quota (429) من Google Sheets.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if ("429" in str(e) or "Quota exceeded" in str(e)) and attempt < max_retries - 1:
+                    time.sleep(delay * (attempt + 1))
+                else:
+                    raise e
         return None
+    return wrapper
 
-logo_base64 = get_image_base64("logo.jpg")
+def generate_random_password(length=6):
+    """توليد كلمة مرور عشوائية من حروف وأرقام."""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
 
-# ====================================================================================================
-# Main CSS
-# ====================================================================================================
+# =============================================================================
+# الثوابت: الفئات العمرية الثلاث
+# =============================================================================
+AGE_CATEGORIES = [
+    "🏃‍♀️ بنات (جميع الأعمار)",
+    "🏃 بنين (الصف الأول - الخامس الابتدائي)",
+    "🏃 بنين (الصف السادس - الثاني الإعدادي)"
+]
+
+def normalize_age_group(age_str: str) -> str:
+    """
+    محاولة مطابقة النص القادم من الملف الخارجي مع إحدى الفئات الثلاث.
+    إذا تعذر التطابق التام، نبحث عن كلمات مفتاحية.
+    """
+    if not age_str:
+        return None
+    age_str = age_str.strip()
+    # تطابق مباشر
+    for cat in AGE_CATEGORIES:
+        if age_str == cat:
+            return cat
+    # تطابق جزئي
+    if "بنات" in age_str:
+        return AGE_CATEGORIES[0]
+    if "ابتدائي" in age_str or "الاول" in age_str or "الأول" in age_str:
+        return AGE_CATEGORIES[1]
+    if "إعدادي" in age_str or "السادس" in age_str:
+        return AGE_CATEGORIES[2]
+    return None
+
+# =============================================================================
+# الاتصال بملفات Google Sheets
+# =============================================================================
+@st.cache_resource
+def get_google_sheets_client():
+    """إنشاء عميل Google Sheets للملف الأساسي."""
+    try:
+        cred_section = st.secrets["google"]["service_account"]
+        credentials_dict = {
+            "type": cred_section["type"],
+            "project_id": cred_section["project_id"],
+            "private_key_id": cred_section["private_key_id"],
+            "private_key": cred_section["private_key"].replace("\\n", "\n"),
+            "client_email": cred_section["client_email"],
+            "client_id": cred_section["client_id"],
+            "auth_uri": cred_section["auth_uri"],
+            "token_uri": cred_section["token_uri"],
+            "auth_provider_x509_cert_url": cred_section["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": cred_section["client_x509_cert_url"],
+            "universe_domain": cred_section.get("universe_domain", "googleapis.com")
+        }
+        spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة إعدادات الملف الأساسي: {str(e)}")
+        return None, None
+
+    try:
+        credentials = Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
+        client = gspread.authorize(credentials)
+        return client, spreadsheet_id
+    except Exception as e:
+        st.error(f"❌ خطأ في الاتصال بالملف الأساسي: {str(e)}")
+        return None, None
+
+@st.cache_resource
+def get_external_sheets_client():
+    """إنشاء عميل Google Sheets للملف الخارجي (إن وجد)."""
+    try:
+        _ = st.secrets["external_sheet"]
+    except KeyError:
+        return None, None
+    try:
+        cred_section = st.secrets["external_sheet"]["service_account"]
+        credentials_dict = {
+            "type": cred_section["type"],
+            "project_id": cred_section["project_id"],
+            "private_key_id": cred_section["private_key_id"],
+            "private_key": cred_section["private_key"].replace("\\n", "\n"),
+            "client_email": cred_section["client_email"],
+            "client_id": cred_section["client_id"],
+            "auth_uri": cred_section["auth_uri"],
+            "token_uri": cred_section["token_uri"],
+            "auth_provider_x509_cert_url": cred_section["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": cred_section["client_x509_cert_url"],
+            "universe_domain": cred_section.get("universe_domain", "googleapis.com")
+        }
+        spreadsheet_id = st.secrets["external_sheet"]["spreadsheet_id"]
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة إعدادات الملف الخارجي: {str(e)}")
+        return None, None
+
+    try:
+        credentials = Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
+        client = gspread.authorize(credentials)
+        return client, spreadsheet_id
+    except Exception as e:
+        st.error(f"❌ خطأ في الاتصال بالملف الخارجي: {str(e)}")
+        return None, None
+
+@st.cache_resource
+def get_workbook():
+    """فتح الملف الأساسي."""
+    client, spreadsheet_id = get_google_sheets_client()
+    if client and spreadsheet_id:
+        try:
+            return client.open_by_key(spreadsheet_id)
+        except Exception as e:
+            st.error(f"❌ خطأ في فتح الملف الأساسي: {str(e)}")
+    return None
+
+@st.cache_resource
+def get_external_workbook():
+    """فتح الملف الخارجي (إن وجد)."""
+    client, spreadsheet_id = get_external_sheets_client()
+    if client and spreadsheet_id:
+        try:
+            return client.open_by_key(spreadsheet_id)
+        except Exception as e:
+            st.error(f"❌ خطأ في فتح الملف الخارجي: {str(e)}")
+    return None
+
+@st.cache_resource
+def get_worksheet(sheet_name, external=False):
+    """الحصول على ورقة من الملف الأساسي أو الخارجي."""
+    workbook = get_external_workbook() if external else get_workbook()
+    if workbook:
+        try:
+            return workbook.worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            return None
+        except Exception as e:
+            st.error(f"❌ خطأ في الوصول إلى ورقة {sheet_name}: {str(e)}")
+            return None
+    return None
+
+def init_sheets():
+    """
+    تهيئة أوراق الملف الأساسي.
+    Users: username, password, role, age_group, created_at
+    Attendance: player_name, date, status, recorded_by, created_at
+    Finance, Payments
+    """
+    workbook = get_workbook()
+    if not workbook:
+        return False
+
+    required = {
+        "Users": ("Users", ["username", "password", "role", "age_group", "created_at"], 1000),
+        "Attendance": ("Attendance", ["player_name", "date", "status", "recorded_by", "created_at"], 50000),
+        "Finance": ("Finance", ["player_name", "season_fee", "start_date", "end_date",
+                                "subscription_status", "total_paid", "last_payment_date", "updated_at"], 1000),
+        "Payments": ("Payments", ["player_name", "amount", "payment_method", "payment_date",
+                                  "notes", "recorded_by", "created_at"], 1000)
+    }
+
+    existing_sheets = {sheet.title: sheet for sheet in workbook.worksheets()}
+
+    for sheet_key, (title, headers, rows_needed) in required.items():
+        if sheet_key not in existing_sheets:
+            sheet = workbook.add_worksheet(title=title, rows=str(rows_needed), cols=str(len(headers)))
+            sheet.append_row(headers)
+        else:
+            sheet = existing_sheets[sheet_key]
+            existing_headers = sheet.row_values(1)
+            if set(existing_headers) != set(headers):
+                # تحديث الصف الأول بالعناوين الصحيحة دون مسح البيانات
+                sheet.update('A1', [headers])
+            current_rows = sheet.row_count
+            if current_rows < rows_needed:
+                sheet.add_rows(rows_needed - current_rows)
+
+    get_worksheet.clear()
+    return True
+
+# =============================================================================
+# دوال قراءة البيانات مع التخزين المؤقت
+# =============================================================================
+@retry_on_quota
+def _get_all_records_safe(sheet_name, external=False):
+    """قراءة جميع سجلات ورقة معينة بأمان."""
+    sheet = get_worksheet(sheet_name, external)
+    if sheet:
+        try:
+            return sheet.get_all_records()
+        except Exception as e:
+            st.error(f"⚠️ خطأ في قراءة ورقة {sheet_name}: {str(e)}")
+            return []
+    return []
+
+@st.cache_data(ttl=60)
+def get_users_sheet_data():
+    return _get_all_records_safe("Users")
+
+@st.cache_data(ttl=60)
+def get_attendance_sheet_data():
+    return _get_all_records_safe("Attendance")
+
+@st.cache_data(ttl=60)
+def get_finance_sheet_data():
+    return _get_all_records_safe("Finance")
+
+@st.cache_data(ttl=60)
+def get_payments_sheet_data():
+    return _get_all_records_safe("Payments")
+
+def clean_records(records):
+    """تنظيف السجلات: إزالة المسافات الزائدة من النصوص."""
+    cleaned = []
+    for row in records:
+        cleaned_row = {}
+        for k, v in row.items():
+            if isinstance(v, str):
+                cleaned_row[k] = v.strip()
+            else:
+                cleaned_row[k] = v
+        cleaned.append(cleaned_row)
+    return cleaned
+
+def get_all_users():
+    return clean_records(get_users_sheet_data())
+
+def get_all_attendance():
+    return clean_records(get_attendance_sheet_data())
+
+def get_all_finance():
+    return clean_records(get_finance_sheet_data())
+
+def get_all_payments():
+    return clean_records(get_payments_sheet_data())
+
+# =============================================================================
+# استيراد لاعبين من ملف خارجي
+# =============================================================================
+def import_players_from_external():
+    """
+    قراءة الأسماء والفئات العمرية من الملف الخارجي (إذا تم إعداده في secrets.toml)
+    وإضافتهم إلى Users الأساسي مع كلمة مرور عشوائية وتصنيفهم إلى الفئات المعيارية.
+    """
+    if "external_sheet" not in st.secrets:
+        return False, "لم يتم إعداد الملف الخارجي في secrets.toml."
+
+    try:
+        cfg = st.secrets["external_sheet"]
+        sheet_name = cfg.get("worksheet_name", "Players")
+        name_col = cfg.get("name_column", "الاسم")
+        group_col = cfg.get("group_column", "الفئة العمرية")
+    except Exception as e:
+        return False, f"خطأ في قراءة إعدادات الملف الخارجي: {e}"
+
+    external_data = _get_all_records_safe(sheet_name, external=True)
+    if not external_data:
+        return False, "لم يتم العثور على بيانات في الملف الخارجي."
+
+    current_users = {u["username"] for u in get_all_users()}
+    new_players = []
+    for row in external_data:
+        name = row.get(name_col, "").strip()
+        age_raw = row.get(group_col, "").strip()
+        age_cat = normalize_age_group(age_raw)
+        if not name or name in current_users:
+            continue
+        new_players.append((name, age_cat if age_cat else age_raw))
+
+    if not new_players:
+        return True, "جميع اللاعبين مسجلين بالفعل."
+
+    added = 0
+    for name, age_cat in new_players:
+        password = generate_random_password()
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if append_row_to_sheet("Users", [name, password, "player", age_cat, created_at]):
+            added += 1
+
+    return True, f"تم استيراد {added} لاعب جديد بنجاح (مع كلمات مرور عشوائية)."
+
+# =============================================================================
+# دوال الكتابة (فردي، مجمع، تحديث، حذف)
+# =============================================================================
+@retry_on_quota
+def append_row_to_sheet(sheet_name, row_data):
+    """إضافة صف جديد إلى نهاية الورقة."""
+    sheet = get_worksheet(sheet_name)
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet(sheet_name)
+    if sheet:
+        try:
+            sheet.append_row(row_data)
+            st.cache_data.clear()
+            return True
+        except Exception as e:
+            st.error(f"❌ خطأ في الإضافة إلى {sheet_name}: {str(e)}")
+            return False
+    return False
+
+@retry_on_quota
+def append_rows_to_sheet(sheet_name, rows_data):
+    """إضافة عدة صفوف دفعة واحدة."""
+    if not rows_data:
+        return True
+    sheet = get_worksheet(sheet_name)
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet(sheet_name)
+    if sheet:
+        try:
+            sheet.append_rows(rows_data)
+            st.cache_data.clear()
+            return True
+        except Exception as e:
+            st.error(f"❌ خطأ في الإضافة المتعددة إلى {sheet_name}: {str(e)}")
+            return False
+    return False
+
+@retry_on_quota
+def update_cell_in_sheet(sheet_name, row, col, value):
+    """تحديث قيمة خلية محددة."""
+    sheet = get_worksheet(sheet_name)
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet(sheet_name)
+    if sheet:
+        try:
+            sheet.update_cell(row, col, value)
+            st.cache_data.clear()
+            return True
+        except Exception as e:
+            st.error(f"❌ خطأ في تحديث الخلية: {str(e)}")
+            return False
+    return False
+
+@retry_on_quota
+def delete_row_from_sheet(sheet_name, row_index):
+    """حذف صف كامل من الورقة."""
+    sheet = get_worksheet(sheet_name)
+    if sheet:
+        try:
+            sheet.delete_rows(row_index)
+            st.cache_data.clear()
+            return True
+        except Exception as e:
+            st.error(f"❌ خطأ في حذف الصف: {str(e)}")
+            return False
+    return False
+
+# =============================================================================
+# دوال المستخدمين
+# =============================================================================
+def get_user(username: str):
+    """البحث عن مستخدم بالاسم."""
+    users = get_all_users()
+    username_clean = username.strip() if username else ""
+    for user in users:
+        if user.get("username", "").strip() == username_clean:
+            return user
+    return None
+
+def check_coach_exists():
+    """التحقق من وجود كابتن واحد على الأقل."""
+    users = get_all_users()
+    for user in users:
+        if user.get("role", "").strip() == "coach":
+            return True
+    return False
+
+def add_user(username: str, password: str, role: str = "player", age_group: str = ""):
+    """إضافة مستخدم جديد مع الفئة العمرية."""
+    username = username.strip() if username else ""
+    password = password.strip() if password else ""
+    if get_user(username):
+        return False, "اسم المستخدم موجود بالفعل"
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if append_row_to_sheet("Users", [username, password, role, age_group.strip(), created_at]):
+        return True, f"تم إضافة المستخدم بنجاح كـ {'كابتن' if role == 'coach' else 'لاعب'}"
+    return False, "خطأ في الاتصال بقاعدة البيانات"
+
+def validate_triple_name(name: str) -> bool:
+    """التحقق من أن الاسم ثلاثي بالعربية."""
+    if not name or not isinstance(name, str):
+        return False
+    name = name.strip()
+    parts = name.split()
+    if len(parts) != 3:
+        return False
+    for part in parts:
+        if len(part) < 2:
+            return False
+        if not re.match(r'^[\u0600-\u06FF]+$', part):
+            return False
+    return True
+
+# =============================================================================
+# دوال الحضور والغياب (مع منع التكرار وكتابة مجمعة)
+# =============================================================================
+def is_attendance_recorded_today(player_name: str) -> bool:
+    """التحقق من أن اللاعب سُجل حضوره/غيابه اليوم."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    records = get_all_attendance()
+    for r in records:
+        if r.get("player_name", "").strip() == player_name.strip() and r.get("date") == today:
+            return True
+    return False
+
+def record_attendance(player_name: str, status: str, recorded_by: str):
+    """تسجيل حضور/غياب فردي مع منع التكرار."""
+    if is_attendance_recorded_today(player_name):
+        return False, f"تم تسجيل حالة للاعب {player_name} مسبقاً اليوم. لا يمكن التسجيل مرة أخرى."
+    today = datetime.now().strftime("%Y-%m-%d")
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if append_row_to_sheet("Attendance", [player_name.strip(), today, status, recorded_by.strip(), created_at]):
+        return True, f"تم تسجيل {'الحضور' if status == 'Present' else 'الغياب'} بنجاح"
+    return False, "خطأ في الاتصال بقاعدة البيانات"
+
+def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
+    """
+    تسجيل حضور/غياب لمجموعة لاعبين دفعة واحدة.
+    يتجاهل اللاعبين المسجلين مسبقاً اليوم.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    records = get_all_attendance()
+    recorded_today = {r["player_name"].strip() for r in records if r.get("date") == today}
+
+    rows_to_add = []
+    skipped_players = []
+    success_count = 0
+
+    for player_name in player_names:
+        if player_name.strip() in recorded_today:
+            skipped_players.append(player_name)
+            continue
+        rows_to_add.append([player_name.strip(), today, status, recorded_by.strip(), created_at])
+        success_count += 1
+
+    if rows_to_add:
+        if not append_rows_to_sheet("Attendance", rows_to_add):
+            return False, "خطأ في تسجيل الحضور الجماعي"
+
+    msg = f"تم تسجيل {success_count} من {len(player_names)} لاعبين."
+    if skipped_players:
+        msg += f" (تم تخطي {len(skipped_players)} لاعبين لأنهم مسجلين مسبقاً اليوم)"
+    return True, msg
+
+def get_player_attendance(player_name: str):
+    """جلب سجل حضور لاعب محدد."""
+    records = get_all_attendance()
+    return [r for r in records if r.get("player_name", "").strip() == player_name.strip()]
+
+def get_attendance_stats(player_name: str):
+    """حساب إحصائيات الحضور للاعب."""
+    records = get_player_attendance(player_name)
+    if not records:
+        return {"total": 0, "present": 0, "absent": 0, "percentage": 0}
+    total = len(records)
+    present = len([r for r in records if r.get("status") == "Present"])
+    absent = total - present
+    percentage = (present / total * 100) if total > 0 else 0
+    return {"total": total, "present": present, "absent": absent, "percentage": round(percentage, 1)}
+
+def get_today_attendance():
+    """سجلات الحضور لليوم الحالي فقط."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    records = get_all_attendance()
+    return [r for r in records if r.get("date") == today]
+
+# =============================================================================
+# دوال الاشتراكات والمدفوعات
+# =============================================================================
+def get_player_finance(player_name: str):
+    records = get_all_finance()
+    for r in records:
+        if r.get("player_name", "").strip() == player_name.strip():
+            return r
+    return None
+
+def calculate_total_paid_from_payments(player_name: str) -> float:
+    payments = get_all_payments()
+    total = 0.0
+    for p in payments:
+        if p.get("player_name", "").strip() == player_name.strip():
+            try:
+                total += float(p.get("amount", 0))
+            except:
+                pass
+    return total
+
+def sync_total_paid_in_finance(player_name: str):
+    finance = get_player_finance(player_name)
+    if not finance:
+        return
+    correct_total = calculate_total_paid_from_payments(player_name)
+    all_finance = get_all_finance()
+    row_idx = None
+    for idx, rec in enumerate(all_finance, start=2):
+        if rec.get("player_name", "").strip() == player_name.strip():
+            row_idx = idx
+            break
+    if row_idx:
+        update_cell_in_sheet("Finance", row_idx, 6, correct_total)
+        payments = [p for p in get_all_payments() if p.get("player_name", "").strip() == player_name.strip()]
+        if payments:
+            latest_date = max(p["payment_date"] for p in payments)
+            update_cell_in_sheet("Finance", row_idx, 7, latest_date)
+
+def get_player_payment_status(player_name: str) -> str:
+    summary = get_payment_summary(player_name)
+    if summary["status"] == "No Subscription":
+        return "لا يوجد اشتراك"
+    if summary["remaining"] <= 0:
+        return "مدفوع بالكامل"
+    elif summary["total_paid"] > 0:
+        return "مدفوع جزئيًا"
+    else:
+        return "غير مدفوع"
+
+def add_or_update_finance_record(player_name: str, season_fee: float, start_date: str, end_date: str, status: str,
+                                 amount_paid: float = 0, payment_method: str = "", payment_date: str = "", notes: str = ""):
+    workbook = get_workbook()
+    if not workbook:
+        return False, "خطأ في الاتصال بقاعدة البيانات"
+    sheet = get_worksheet("Finance")
+    if sheet is None:
+        init_sheets()
+        sheet = get_worksheet("Finance")
+        if sheet is None:
+            return False, "تعذر الوصول إلى ورقة المالية"
+    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    all_records = get_all_finance()
+    row_idx = None
+    for idx, record in enumerate(all_records, start=2):
+        if record.get("player_name", "").strip() == player_name.strip():
+            row_idx = idx
+            break
+    if row_idx:
+        update_cell_in_sheet("Finance", row_idx, 2, season_fee)
+        update_cell_in_sheet("Finance", row_idx, 3, start_date)
+        update_cell_in_sheet("Finance", row_idx, 4, end_date)
+        update_cell_in_sheet("Finance", row_idx, 5, status)
+        update_cell_in_sheet("Finance", row_idx, 8, updated_at)
+        action = "تحديث"
+    else:
+        row_data = [player_name.strip(), season_fee, start_date, end_date, status, 0, "", updated_at]
+        if not append_row_to_sheet("Finance", row_data):
+            return False, "فشل في إضافة البيانات المالية"
+        action = "إضافة"
+    if amount_paid > 0:
+        if not record_payment(player_name, amount_paid, payment_method, payment_date, notes, st.session_state.username):
+            return False, "تم حفظ الاشتراك ولكن فشل تسجيل الدفعة"
+        sync_total_paid_in_finance(player_name)
+    return True, f"تم {action} الاشتراك بنجاح"
+
+def delete_finance_record(player_name: str):
+    all_finance = get_all_finance()
+    row_idx = None
+    for idx, rec in enumerate(all_finance, start=2):
+        if rec.get("player_name", "").strip() == player_name.strip():
+            row_idx = idx
+            break
+    if row_idx:
+        return delete_row_from_sheet("Finance", row_idx)
+    return False
+
+def record_payment(player_name: str, amount: float, payment_method: str, payment_date: str, notes: str = "", recorded_by: str = ""):
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if append_row_to_sheet("Payments", [player_name.strip(), amount, payment_method, payment_date, notes, recorded_by.strip(), created_at]):
+        sync_total_paid_in_finance(player_name)
+        return True, "تم تسجيل الدفعة بنجاح"
+    return False, "خطأ في الاتصال بقاعدة البيانات"
+
+def update_payment_record(payment_row_index: int, player_name: str, old_amount: float, new_amount: float,
+                          payment_method: str, payment_date: str, notes: str = ""):
+    sheet = get_worksheet("Payments")
+    if sheet:
+        update_cell_in_sheet("Payments", payment_row_index, 2, new_amount)
+        update_cell_in_sheet("Payments", payment_row_index, 3, payment_method)
+        update_cell_in_sheet("Payments", payment_row_index, 4, payment_date)
+        update_cell_in_sheet("Payments", payment_row_index, 5, notes)
+        sync_total_paid_in_finance(player_name)
+        return True, "تم تحديث الدفعة بنجاح"
+    return False, "خطأ في تحديث الدفعة"
+
+def delete_payment_record(payment_row_index: int, player_name: str):
+    sheet = get_worksheet("Payments")
+    if sheet:
+        if delete_row_from_sheet("Payments", payment_row_index):
+            sync_total_paid_in_finance(player_name)
+            return True, "تم حذف الدفعة بنجاح"
+    return False, "خطأ في حذف الدفعة"
+
+def get_payment_summary(player_name: str):
+    finance = get_player_finance(player_name)
+    if not finance:
+        return {"season_fee": 0, "total_paid": 0, "remaining": 0, "status": "No Subscription"}
+    try:
+        season_fee = float(finance.get("season_fee", 0))
+    except:
+        season_fee = 0
+    total_paid = calculate_total_paid_from_payments(player_name)
+    remaining = max(0, season_fee - total_paid)
+    return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
+
+# =============================================================================
+# تهيئة الجلسة
+# =============================================================================
+def init_session():
+    defaults = {
+        "logged_in": False,
+        "username": None,
+        "role": None,
+        "current_page": "dashboard",
+        "finance_authenticated": False,
+        "players_authenticated": False,
+        "sheets_initialized": False
+    }
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+def login(username: str, password: str):
+    username = username.strip() if username else ""
+    password = password.strip() if password else ""
+    user = get_user(username)
+    if user and user.get("password", "").strip() == password:
+        st.session_state.logged_in = True
+        st.session_state.username = username
+        st.session_state.role = user.get("role", "player").strip()
+        st.session_state.current_page = "dashboard"
+        st.session_state.finance_authenticated = False
+        st.session_state.players_authenticated = False
+        return True, "تم تسجيل الدخول بنجاح"
+    return False, "اسم المستخدم أو كلمة المرور غير صحيحة"
+
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.role = None
+    st.session_state.current_page = "login"
+    st.session_state.finance_authenticated = False
+    st.session_state.players_authenticated = False
+    st.rerun()
+
+def navigate_to(page: str):
+    st.session_state.current_page = page
+    st.rerun()
+
+# =============================================================================
+# CSS مخصص (ألوان غامقة فاخرة)
+# =============================================================================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap');
-
-header[data-testid="stHeader"] { display: none !important; }
-.stApp > header { display: none !important; }
-#MainMenu { display: none !important; }
-footer { display: none !important; }
-.st-emotion-cache-18ni7ap { display: none !important; }
-[data-testid="stSidebar"] { display: none !important; }
-div[data-testid="stDecoration"] { display: none !important; }
-
-*, *::before, *::after {
-    box-sizing: border-box;
-    font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
-}
-
-.main .block-container {
-    padding-top: 0 !important;
-    padding-bottom: 0 !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-    max-width: 100% !important;
-}
-
-.stApp {
-    background: linear-gradient(135deg, #f0f4f8 0%, #ffffff 50%, #f8fafc 100%) !important;
-    direction: rtl;
-}
-
-.ec-header {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-    box-shadow: 0 4px 30px rgba(0,0,0,0.08);
-    z-index: 10000;
-    padding: 14px 0;
-    border-bottom: 3px solid #e2e8f0;
-    backdrop-filter: blur(10px);
-}
-.ec-header-inner {
-    width: 92%; max-width: 1250px; margin: 0 auto;
-    display: flex; justify-content: space-between; align-items: center;
-}
-.ec-logo-wrap {
-    display: flex; align-items: center; gap: 14px;
-    text-decoration: none; color: inherit; cursor: pointer;
-}
-.ec-logo-img {
-    width: 58px; height: 58px; border-radius: 16px;
-    display: flex; align-items: center; justify-content: center;
-    overflow: hidden; flex-shrink: 0;
-    background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-    box-shadow: 0 6px 20px rgba(30,58,138,0.3);
-    transition: all 0.3s ease;
-}
-.ec-logo-img img { width: 100%; height: 100%; object-fit: cover; }
-.ec-logo-img span { font-size: 2rem; color: white; }
-.ec-logo-wrap:hover .ec-logo-img {
-    transform: scale(1.08) rotate(3deg);
-    box-shadow: 0 10px 30px rgba(30,58,138,0.4);
-}
-.ec-logo-txt h1 {
-    font-size: 1.7rem; margin: 0; color: #1e3a8a;
-    font-weight: 900; line-height: 1.1;
-}
-.ec-logo-txt h1 span { color: #f59e0b; }
-.ec-logo-txt p {
-    font-size: 0.75rem; color: #64748b; margin: 3px 0 0; font-weight: 600;
-}
-
-.ec-menu-toggle { display: none; }
-.ec-menu-btn {
-    display: inline-flex; align-items: center; gap: 10px;
-    background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-    color: white; font-weight: 800; border-radius: 999px;
-    padding: 12px 22px; cursor: pointer;
-    box-shadow: 0 8px 25px rgba(59,130,246,0.2);
-    transition: all 0.25s ease; user-select: none; font-size: 0.95rem;
-}
-.ec-menu-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 12px 30px rgba(59,130,246,0.3);
-}
-
-.ec-overlay {
-    position: fixed; inset: 0;
-    background: rgba(15,23,42,0.55);
-    z-index: 10001; display: none;
-    backdrop-filter: blur(4px);
-}
-.ec-menu-toggle:checked ~ .ec-overlay { display: block; }
-
-.ec-sidenav {
-    position: fixed; top: 82px; right: 16px;
-    width: 370px; max-width: calc(100vw - 32px);
-    height: calc(100vh - 98px);
-    background: linear-gradient(180deg, #ffffff, #f8fafc);
-    box-shadow: -12px 0 50px rgba(15,23,42,0.18);
-    z-index: 10002;
-    transform: translateX(120%);
-    transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
-    padding: 18px 14px; overflow-y: auto;
-    border-radius: 24px;
-    border: 1px solid rgba(226,232,240,0.9);
-}
-.ec-menu-toggle:checked ~ .ec-sidenav { transform: translateX(0); }
-.ec-sidenav::-webkit-scrollbar { width: 5px; }
-.ec-sidenav::-webkit-scrollbar-track { background: #e2e8f0; border-radius: 10px; }
-.ec-sidenav::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 10px; }
-
-.ec-sidenav-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 10px 16px; margin-bottom: 8px;
-    border-bottom: 1px solid #e2e8f0;
-}
-.ec-sidenav-brand {
-    display: flex; align-items: center; gap: 12px;
-}
-.ec-sidenav-logo {
-    width: 50px; height: 50px; border-radius: 14px;
-    background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-    display: flex; align-items: center; justify-content: center;
-    overflow: hidden; flex-shrink: 0;
-    box-shadow: 0 6px 16px rgba(59,130,246,0.2);
-}
-.ec-sidenav-logo img { width: 100%; height: 100%; object-fit: cover; }
-.ec-sidenav-logo span { color: white; font-size: 1.6rem; }
-.ec-sidenav-brand h2 { margin: 0; font-size: 1.15rem; color: #1e3a8a; font-weight: 800; }
-.ec-sidenav-brand p { margin: 3px 0 0; color: #64748b; font-size: 0.75rem; font-weight: 600; }
-.ec-close-btn {
-    width: 40px; height: 40px; border-radius: 50%; border: none;
-    display: inline-flex; align-items: center; justify-content: center;
-    cursor: pointer; background: #f1f5f9; color: #0f172a;
-    font-size: 1.8rem; text-decoration: none; user-select: none;
-    transition: background 0.2s;
-}
-.ec-close-btn:hover { background: #e2e8f0; }
-
-.ec-sidenav a {
-    display: flex; align-items: center; gap: 14px;
-    padding: 14px 18px; color: #1e293b; text-decoration: none;
-    font-weight: 700; border-radius: 16px;
-    transition: all 0.25s ease; cursor: pointer;
-    font-size: 15px; margin: 6px 4px;
-}
-.ec-sidenav a:hover {
-    background: linear-gradient(135deg, #eff6ff, #dbeafe);
-    color: #1d4ed8; transform: translateX(-6px);
-}
-
-.ec-spacer { height: 96px; }
-
-.ec-container {
-    width: 90%; max-width: 1200px;
-    margin: 0 auto; padding: 25px 15px;
-}
-
-.ec-hero {
-    background: linear-gradient(135deg, rgba(15,23,42,0.88), rgba(30,58,138,0.75)),
-                url('https://images.unsplash.com/photo-1575361204480-aadea25e6e68?w=1600&q=80');
-    background-size: cover; background-position: center;
-    border-radius: 28px; padding: 100px 30px;
-    text-align: center; margin-bottom: 55px;
-    position: relative; overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-}
-.ec-hero::before {
-    content: ''; position: absolute;
-    top: -50%; right: -50%; width: 200%; height: 200%;
-    background: radial-gradient(circle, rgba(245,158,11,0.1) 0%, transparent 60%);
-    animation: ec-rotate 30s linear infinite;
-}
-@keyframes ec-rotate { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-
-.ec-hero h1 {
-    color: white; font-size: 3.5rem; margin: 0 0 18px;
-    font-weight: 900; text-shadow: 2px 4px 12px rgba(0,0,0,0.4);
-    position: relative; z-index: 1;
-}
-.ec-hero h1 span { color: #fbbf24; }
-.ec-hero .ec-hero-desc {
-    color: #e2e8f0; max-width: 700px; margin: 0 auto 12px;
-    font-size: 1.15rem; line-height: 1.7; position: relative; z-index: 1;
-}
-.ec-hero .ec-hero-slogan {
-    color: #fbbf24; font-weight: 800; font-size: 1.3rem;
-    margin: 20px 0 30px; position: relative; z-index: 1;
-    text-shadow: 1px 2px 6px rgba(0,0,0,0.3);
-}
-.ec-hero-btns {
-    display: flex; justify-content: center; gap: 16px;
-    flex-wrap: wrap; position: relative; z-index: 1;
-}
-.ec-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 16px 45px; border-radius: 60px; font-weight: 800;
-    font-size: 1.15rem; text-decoration: none; cursor: pointer;
-    transition: all 0.3s ease; border: none;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-}
-.ec-btn-gold {
-    background: linear-gradient(135deg, #f59e0b, #d97706);
-    color: white;
-}
-.ec-btn-gold:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 14px 35px rgba(245,158,11,0.4);
-}
-.ec-btn-outline {
-    background: rgba(255,255,255,0.15);
-    color: white; border: 2px solid rgba(255,255,255,0.4);
-    backdrop-filter: blur(4px);
-}
-.ec-btn-outline:hover {
-    background: rgba(255,255,255,0.25);
-    transform: translateY(-4px);
-    box-shadow: 0 14px 35px rgba(255,255,255,0.15);
-}
-
-.ec-section-title {
-    font-size: 2.2rem; font-weight: 900; color: #1e293b;
-    text-align: center; margin-bottom: 45px;
-    position: relative; padding-bottom: 18px;
-}
-.ec-section-title::after {
-    content: ''; position: absolute;
-    bottom: 0; right: 50%; transform: translateX(50%);
-    width: 90px; height: 4px;
-    background: linear-gradient(90deg, #f59e0b, #fbbf24, #f59e0b);
-    border-radius: 2px;
-}
-
-.ec-stats {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 28px; margin-bottom: 60px;
-}
-.ec-stat-card {
-    background: white; padding: 38px 20px; border-radius: 22px;
-    text-align: center; border: 1px solid #e2e8f0;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.06);
-    transition: all 0.35s ease;
-}
-.ec-stat-card:hover {
-    transform: translateY(-10px);
-    box-shadow: 0 22px 50px rgba(0,0,0,0.12);
-    border-color: #3b82f6;
-}
-.ec-stat-icon { font-size: 2.8rem; margin-bottom: 10px; }
-.ec-stat-num {
-    font-size: 3rem; font-weight: 900; color: #1e3a8a;
-    display: block; line-height: 1;
-}
-.ec-stat-label {
-    color: #64748b; margin-top: 10px; font-weight: 600; font-size: 1rem;
-}
-
-.ec-features {
-    display: grid; grid-template-columns: repeat(3, 1fr);
-    gap: 28px; margin-bottom: 60px;
-}
-.ec-feature-card {
-    background: white; padding: 38px 26px; border-radius: 22px;
-    text-align: center; transition: all 0.35s ease;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.06);
-    border: 1px solid transparent;
-}
-.ec-feature-card:hover {
-    transform: translateY(-10px);
-    box-shadow: 0 22px 50px rgba(0,0,0,0.12);
-    border-color: #f59e0b;
-}
-.ec-feature-icon { font-size: 3rem; margin-bottom: 18px; }
-.ec-feature-card h3 {
-    color: #1e3a8a; margin: 0 0 14px; font-size: 1.35rem; font-weight: 800;
-}
-.ec-feature-card p {
-    color: #64748b; font-size: 0.93rem; line-height: 1.7; margin: 0;
-}
-
-.ec-page-header {
-    background: linear-gradient(135deg, #1e3a8a, #3b82f6, #1e3a8a);
-    background-size: 200% 200%;
-    border-radius: 28px; padding: 60px 25px;
-    text-align: center; margin-bottom: 45px;
-    animation: ec-hdr-grad 5s ease infinite;
-    box-shadow: 0 12px 40px rgba(30,58,138,0.2);
-}
-@keyframes ec-hdr-grad {
-    0%{background-position:0% 50%}
-    50%{background-position:100% 50%}
-    100%{background-position:0% 50%}
-}
-.ec-page-header h1 {
-    color: white; font-size: 2.4rem; margin: 0 0 12px; font-weight: 900;
-}
-.ec-page-header p { color: #e2e8f0; font-size: 1.05rem; margin: 0; }
-
-.ec-about-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 40px; margin-bottom: 50px; align-items: center;
-}
-.ec-about-visual {
-    background: linear-gradient(135deg, #3b82f6, #1e3a8a);
-    border-radius: 28px; height: 360px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 6rem; color: white;
-    box-shadow: 0 15px 40px rgba(30,58,138,0.25);
-    position: relative; overflow: hidden;
-}
-.ec-about-visual::after {
-    content: ''; position: absolute; inset: 0;
-    background: radial-gradient(circle at 30% 70%, rgba(245,158,11,0.15), transparent 60%);
-}
-.ec-mv-grid {
-    display: grid; grid-template-columns: 1fr 1fr;
-    gap: 30px; margin-top: 35px;
-}
-.ec-mission-card, .ec-vision-card {
-    padding: 32px; border-radius: 22px; transition: all 0.35s ease;
-}
-.ec-mission-card {
-    background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-    border-right: 5px solid #3b82f6;
-}
-.ec-vision-card {
-    background: linear-gradient(135deg, #fffbeb, #fef3c7);
-    border-right: 5px solid #f59e0b;
-}
-.ec-mission-card:hover, .ec-vision-card:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 18px 40px rgba(0,0,0,0.1);
-}
-.ec-mission-card h3, .ec-vision-card h3 {
-    color: #1e3a8a; font-size: 1.5rem; margin: 0 0 14px; font-weight: 800;
-}
-.ec-mission-card p, .ec-vision-card p {
-    color: #334155; line-height: 1.7; margin: 0 0 14px; font-size: 0.95rem;
-}
-.ec-mission-card ul, .ec-vision-card ul {
-    margin: 0 20px 0 0; padding: 0; color: #334155; font-size: 0.93rem;
-}
-.ec-mission-card li, .ec-vision-card li { margin-bottom: 6px; }
-
-.ec-programs-grid {
-    display: grid; grid-template-columns: repeat(2, 1fr);
-    gap: 28px; margin-bottom: 50px;
-}
-.ec-program-card {
-    background: white; border-radius: 22px; overflow: hidden;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.06);
-    transition: all 0.35s ease; border: 1px solid #e2e8f0;
-}
-.ec-program-card:hover {
-    transform: translateY(-10px);
-    box-shadow: 0 22px 50px rgba(0,0,0,0.12);
-}
-.ec-program-hdr {
-    height: 160px;
-    background: linear-gradient(135deg, #3b82f6, #1e3a8a);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 3.5rem; color: white;
-}
-.ec-program-body { padding: 26px; }
-.ec-program-body h3 {
-    color: #1e3a8a; margin: 0 0 16px; font-size: 1.4rem; font-weight: 800;
-}
-.ec-schedule-box {
-    background: #f8fafc; padding: 18px; border-radius: 16px;
-}
-.ec-schedule-item {
-    padding: 12px 0; border-bottom: 1px solid #e2e8f0;
-    color: #334155; font-size: 0.95rem;
-}
-.ec-schedule-item:last-child { border-bottom: none; }
-
-.ec-lead-captain {
-    max-width: 600px; margin: 0 auto 40px;
-    background: white; border-radius: 24px; overflow: hidden;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.1);
-    border: 2px solid #f59e0b;
-    transition: all 0.35s ease;
-}
-.ec-lead-captain:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 25px 60px rgba(0,0,0,0.15);
-}
-.ec-lead-avatar {
-    height: 240px;
-    background: linear-gradient(135deg, #f59e0b, #d97706, #f59e0b);
-    background-size: 200% 200%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-}
-.ec-lead-avatar img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-.ec-lead-info {
-    padding: 30px; text-align: center;
-}
-.ec-lead-info h3 {
-    color: #1e3a8a; font-size: 1.6rem; font-weight: 900; margin: 0 0 8px;
-}
-.ec-lead-info .ec-title-badge {
-    display: inline-block; background: linear-gradient(135deg, #f59e0b, #d97706);
-    color: white; padding: 4px 18px; border-radius: 20px;
-    font-size: 0.85rem; font-weight: 700; margin-bottom: 16px;
-}
-.ec-lead-info .ec-qualifications {
-    color: #475569; font-size: 0.93rem; line-height: 1.8;
-    text-align: right;
-}
-
-.ec-captains-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 28px;
-    margin-bottom: 50px;
-}
-@media (max-width: 1024px) {
-    .ec-captains-grid {
-        grid-template-columns: repeat(2, 1fr);
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+    * { font-family: 'Cairo', sans-serif !important; }
+    .main { direction: rtl; }
+    .stApp { background: radial-gradient(circle at top left, #0a1c14, #030a07); }
+    [data-testid="stSidebar"] { display: none !important; }
+    header[data-testid="stHeader"] { display: none !important; }
+    .stDeployButton, .stActionButton, #MainMenu, footer,
+    div[data-testid="stToolbar"], div[data-testid="stDecoration"],
+    div[data-testid="stStatusWidget"] { display: none !important; }
+    
+    .nav-container {
+        background: rgba(20, 50, 40, 0.7); backdrop-filter: blur(12px);
+        border-radius: 50px; padding: 10px 20px; margin: 20px 0;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.6); border: 1px solid rgba(80, 180, 140, 0.3);
     }
-}
-@media (max-width: 640px) {
-    .ec-captains-grid {
-        grid-template-columns: 1fr;
+    .nav-container .stButton > button {
+        background: rgba(0, 0, 0, 0.25) !important; color: #e0f0e8 !important;
+        border: 1px solid #2a7a5f !important; border-radius: 30px !important;
+        padding: 10px 15px !important; font-size: 16px !important; font-weight: 600 !important;
+        width: 100% !important; backdrop-filter: blur(4px); transition: all 0.3s;
     }
-}
-.ec-captain-card {
-    background: white;
-    border-radius: 22px;
-    overflow: hidden;
-    text-align: center;
-    border: 1px solid #e2e8f0;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.06);
-    transition: all 0.35s ease;
-    display: flex;
-    flex-direction: column;
-}
-.ec-captain-card:hover {
-    transform: translateY(-10px);
-    box-shadow: 0 22px 50px rgba(0,0,0,0.12);
-    border-color: #3b82f6;
-}
-.ec-captain-avatar {
-    height: 220px;
-    background: #f1f5f9;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-}
-.ec-captain-avatar img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-.ec-captain-info {
-    padding: 24px;
-    flex-grow: 1;
-    display: flex;
-    flex-direction: column;
-}
-.ec-captain-info h3 {
-    color: #1e3a8a;
-    margin: 0 0 5px;
-    font-size: 1.25rem;
-    font-weight: 800;
-}
-.ec-captain-info .ec-coach-title {
-    color: #3b82f6;
-    font-weight: 700;
-    margin-bottom: 12px;
-    font-size: 0.9rem;
-}
-.ec-captain-info .ec-coach-desc {
-    color: #64748b;
-    font-size: 0.88rem;
-    line-height: 1.7;
-    text-align: right;
-    margin-top: 8px;
-}
-
-.ec-success-msg {
-    background: linear-gradient(135deg, #10b981, #059669);
-    color: #ffffff !important;
-    padding: 20px; border-radius: 16px;
-    margin-top: 25px; text-align: center;
-    font-weight: 700; font-size: 1.05rem;
-    animation: ec-fadeIn 0.5s ease;
-    box-shadow: 0 6px 20px rgba(16,185,129,0.3);
-}
-.ec-error-msg {
-    background: linear-gradient(135deg, #ef4444, #dc2626);
-    color: #ffffff !important;
-    padding: 20px; border-radius: 16px;
-    margin-top: 25px; text-align: center;
-    font-weight: 700; font-size: 1.05rem;
-    animation: ec-fadeIn 0.5s ease;
-}
-@keyframes ec-fadeIn {
-    from { opacity: 0; transform: translateY(-15px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.ec-contact-card {
-    background: white; padding: 32px; border-radius: 22px;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.06);
-    transition: all 0.35s ease; border: 1px solid #e2e8f0;
-}
-.ec-contact-card:hover {
-    transform: translateY(-6px);
-    box-shadow: 0 18px 40px rgba(0,0,0,0.1);
-}
-.ec-contact-item {
-    display: flex; align-items: center; gap: 16px;
-    padding: 16px 0; border-bottom: 1px solid #f1f5f9;
-}
-.ec-contact-item:last-child { border-bottom: none; }
-.ec-contact-item .ec-icon {
-    font-size: 1.6rem; width: 45px; height: 45px;
-    background: #f0f9ff; border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-}
-.ec-map-container {
-    margin-top: 25px;
-    border-radius: 18px;
-    overflow: hidden;
-    box-shadow: 0 6px 22px rgba(0,0,0,0.1);
-}
-.ec-map-container iframe {
-    width: 100%;
-    height: 280px;
-    border: 0;
-}
-.ec-whatsapp-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    background: #25D366;
-    color: white !important;
-    padding: 12px 25px;
-    border-radius: 50px;
-    text-decoration: none;
-    font-weight: 700;
-    margin-top: 15px;
-    transition: all 0.3s ease;
-}
-.ec-whatsapp-btn:hover {
-    background: #128C7E;
-    transform: scale(1.03);
-}
-
-.stButton button,
-div[data-testid="stForm"] button,
-div.stButton button,
-button[kind="primary"],
-button[kind="secondary"] {
-    background: linear-gradient(135deg, #f59e0b, #d97706) !important;
-    color: #000000 !important;
-    font-weight: 800 !important;
-    border: none !important;
-    border-radius: 60px !important;
-    padding: 12px 28px !important;
-    font-size: 1rem !important;
-    transition: all 0.3s ease !important;
-    opacity: 1 !important;
-}
-
-.stButton button:hover,
-div[data-testid="stForm"] button:hover {
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 20px rgba(245,158,11,0.4) !important;
-    background: linear-gradient(135deg, #e88b00, #c06500) !important;
-    color: #000000 !important;
-}
-
-label, .stTextInput label, .stSelectbox label, .stTextArea label {
-    color: #1e293b !important;
-    font-weight: 600 !important;
-}
-input, textarea, select {
-    color: #0f172a !important;
-    background-color: #ffffff !important;
-    border: 1px solid #cbd5e1 !important;
-    border-radius: 12px !important;
-}
-
-.ec-contact-card h3,
-.ec-contact-card h4,
-.ec-contact-card .stMarkdown h3,
-div[data-testid="stForm"] h3 {
-    color: #000000 !important;
-    font-weight: 800 !important;
-}
-
-.ec-news-card {
-    background: white; border-radius: 20px; padding: 28px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.05);
-    border-right: 4px solid #f59e0b;
-    transition: all 0.3s ease;
-}
-.ec-news-card:hover {
-    transform: translateX(-8px);
-    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-}
-.ec-news-card h3 {
-    color: #1e3a8a; font-size: 1.2rem; margin: 0 0 8px; font-weight: 800;
-}
-.ec-news-card .ec-news-date {
-    color: #94a3b8; font-size: 0.82rem; margin-bottom: 10px;
-}
-.ec-news-card p {
-    color: #475569; font-size: 0.93rem; line-height: 1.7; margin: 0;
-}
-
-.ec-faq-card {
-    background: white; border-radius: 20px; padding: 28px;
-    margin-bottom: 16px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.05);
-    border: 1px solid #e2e8f0;
-    transition: all 0.3s ease;
-}
-.ec-faq-card:hover {
-    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
-    border-color: #3b82f6;
-}
-.ec-faq-card h4 {
-    color: #1e3a8a; font-size: 1.1rem; margin: 0 0 12px;
-    font-weight: 800; display: flex; align-items: center; gap: 10px;
-}
-.ec-faq-card p {
-    color: #475569; font-size: 0.93rem; line-height: 1.8; margin: 0;
-    padding-right: 32px;
-}
-
-.ec-footer {
-    background: linear-gradient(135deg, #0f172a, #1e293b);
-    color: white; padding: 50px 0 30px;
-    border-radius: 28px 28px 0 0; margin-top: 60px;
-}
-.ec-footer-inner {
-    width: 90%; max-width: 1200px; margin: 0 auto;
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 35px; margin-bottom: 35px;
-}
-.ec-footer h4 {
-    color: #f59e0b; font-size: 1.15rem; margin: 0 0 16px; font-weight: 800;
-}
-.ec-footer p, .ec-footer li {
-    color: #cbd5e1; font-size: 0.9rem; line-height: 1.7;
-}
-.ec-footer ul { list-style: none; padding: 0; margin: 0; }
-.ec-footer li { margin-bottom: 8px; }
-.ec-footer a {
-    color: #cbd5e1; text-decoration: none; transition: color 0.2s;
-}
-.ec-footer a:hover { color: #f59e0b; }
-.ec-footer-bottom {
-    border-top: 1px solid rgba(255,255,255,0.1);
-    padding-top: 20px; text-align: center;
-    color: #64748b; font-size: 0.82rem;
-    width: 90%; max-width: 1200px; margin: 0 auto;
-}
-
-.ec-info-banner {
-    background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-    border-radius: 24px; padding: 35px; text-align: center;
-    color: white; margin-top: 40px;
-    box-shadow: 0 12px 35px rgba(30,58,138,0.2);
-}
-.ec-info-banner h3 { font-size: 1.7rem; margin: 0 0 12px; font-weight: 900; }
-.ec-info-banner p { margin: 0 0 20px; color: #e2e8f0; }
-.ec-info-banner .ec-banner-stats {
-    display: flex; justify-content: center; gap: 30px;
-    flex-wrap: wrap; margin-top: 20px;
-}
-.ec-info-banner .ec-banner-stat {
-    text-align: center;
-}
-.ec-info-banner .ec-banner-stat span {
-    display: block; font-size: 1.6rem; font-weight: 900;
-}
-
-@media (max-width: 768px) {
-    .ec-stats, .ec-features, .ec-programs-grid,
-    .ec-about-grid, .ec-mv-grid {
-        grid-template-columns: 1fr;
+    .nav-container .stButton > button:hover {
+        background: #1f6e54 !important; color: white !important;
+        border-color: #4ecb9c !important; transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(30, 200, 120, 0.3);
     }
-    .ec-hero h1 { font-size: 2.2rem; }
-    .ec-hero { padding: 70px 20px; }
-    .ec-section-title { font-size: 1.6rem; }
-    .ec-stat-num { font-size: 2.2rem; }
-    .ec-logo-txt h1 { font-size: 1.2rem; }
-    .ec-logo-img { width: 46px; height: 46px; }
-    .ec-spacer { height: 84px; }
-    .ec-sidenav {
-        top: 72px; right: 8px;
-        width: min(92vw, 380px);
-        height: calc(100vh - 84px);
+    
+    .login-container {
+        max-width: 480px; margin: 40px auto; padding: 40px 35px;
+        background: rgba(10, 30, 25, 0.9); backdrop-filter: blur(10px);
+        border-radius: 30px; box-shadow: 0 25px 50px rgba(0, 0, 0, 0.7);
+        text-align: center; border: 1px solid #2c7a60;
     }
-    .ec-page-header h1 { font-size: 1.8rem; }
-    .ec-btn { padding: 14px 32px; font-size: 1rem; }
-    .ec-lead-captain { margin: 0 auto 30px; }
-    .ec-info-banner .ec-banner-stats { gap: 16px; }
-}
+    .login-icon { margin-bottom: 20px; display: flex; justify-content: center; }
+    .login-title { color: #c0f0d0 !important; font-size: 42px !important; font-weight: 800 !important; margin-bottom: 8px; text-shadow: 0 4px 12px #0f2f22; }
+    .login-subtitle { color: #a0d0b8 !important; font-size: 20px !important; font-weight: 500 !important; margin-bottom: 30px; }
+    
+    .stat-card { background: linear-gradient(145deg, #15382b, #0c231a); color: white; border-radius: 20px; padding: 20px 10px; text-align: center; box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5); border: 1px solid #2f7a5a; }
+    .stat-number { font-size: 40px; font-weight: 800; color: #b0f0c0; margin-bottom: 5px; }
+    .stat-label { font-size: 15px; font-weight: 500; color: #c0e0d0; }
+    
+    .welcome-box { background: linear-gradient(145deg, #1a5a44, #0e3628); color: white; padding: 20px; border-radius: 20px; margin-bottom: 20px; text-align: center; box-shadow: 0 8px 20px rgba(0,0,0,0.4); border: 1px solid #3fa07c; }
+    .info-box { background: #163f31; border-right: 6px solid #40c090; padding: 15px 20px; border-radius: 16px; margin-bottom: 20px; color: #e0f5e8 !important; font-weight: 500; }
+    
+    .stButton > button { background: linear-gradient(145deg, #1f6e54, #144d3a); color: white; border: none; border-radius: 14px; padding: 12px 25px; font-size: 16px; font-weight: 600; width: 100%; box-shadow: 0 6px 15px rgba(0, 20, 0, 0.5); border: 1px solid #3da07a; transition: all 0.2s; }
+    .stButton > button:hover { background: #2a8f6a; transform: translateY(-2px); box-shadow: 0 10px 25px rgba(40, 180, 120, 0.4); }
+    
+    .stTextInput > div > div > input { border-radius: 14px; border: 1.5px solid #2e7a5c; padding: 12px 15px; text-align: right; background: #0f2b20; color: #f0faf0; }
+    .stTextInput > div > div > input:focus { border-color: #50d0a0; box-shadow: 0 0 0 3px rgba(80, 200, 150, 0.3); }
+    
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; background: transparent; }
+    .stTabs [data-baseweb="tab"] { background: #13382a; border-radius: 16px 16px 0 0; padding: 10px 22px; color: #c8e8d8; border: 1px solid #2f785a; border-bottom: none; font-weight: 600; }
+    .stTabs [aria-selected="true"] { background: #1f6e54 !important; color: white !important; border-color: #50c898; }
+    
+    .user-info { color: #e0f0e4; font-size: 16px; font-weight: 600; padding: 10px 0; text-align: center; background: rgba(20, 60, 45, 0.6); backdrop-filter: blur(5px); border-radius: 30px; border: 1px solid #3d8e6e; }
+    .stDataFrame { border-radius: 18px; border: 1px solid #2f785a; overflow: hidden; background: #0a1f16; }
+    h1, h2, h3, h4, h5, h6 { color: #c0f0d0 !important; }
+    p, span, div { color: #d0e8dc; }
+    
+    /* تنسيق بطاقات الإحصائيات داخل السجل */
+    .stat-card-small {
+        background: linear-gradient(145deg, #15382b, #0c231a);
+        color: white;
+        border-radius: 16px;
+        padding: 14px 8px;
+        text-align: center;
+        box-shadow: 0 6px 12px rgba(0,0,0,0.4);
+        border: 1px solid #2f7a5a;
+        margin-bottom: 10px;
+    }
+    .stat-card-small .cat-name { font-size: 16px; font-weight: 700; color: #b0f0c0; margin-bottom: 6px; }
+    .stat-card-small .cat-detail { font-size: 14px; color: #d0e8dc; }
 </style>
 """, unsafe_allow_html=True)
 
-# ====================================================================================================
-# Helper function to generate navigation link
-# ====================================================================================================
-def nav_link(text, page_name, icon=""):
-    return f'<a href="?page={page_name}" target="_self">{icon} {text}</a>'
+# =============================================================================
+# شريط التنقل
+# =============================================================================
+def navigation_bar():
+    col_logo, col_title, col_user = st.columns([0.7, 2.5, 1.2])
+    with col_logo:
+        st.markdown(get_logo_html(50), unsafe_allow_html=True)
+    with col_title:
+        st.markdown('<h2 style="color:#c0f0d0; margin:0; font-size:26px; text-align:right; padding-right:10px;">⚽ الكوتش أكاديمي</h2>', unsafe_allow_html=True)
+    with col_user:
+        role_icon = "👨‍🏫" if st.session_state.role == "coach" else "👤"
+        role_text = "كابتن" if st.session_state.role == "coach" else "لاعب"
+        st.markdown(f'<div class="user-info">{role_icon} {st.session_state.username} ({role_text})</div>', unsafe_allow_html=True)
 
-# ====================================================================================================
-# Header + Side Navigation
-# ====================================================================================================
-logo_html = ""
-if logo_base64:
-    logo_html = f'<img src="data:image/jpeg;base64,{logo_base64}" alt="Logo">'
-else:
-    logo_html = '<span>⚽</span>'
-
-sidenav_links = f"""
-<nav class="ec-sidenav">
-    <div class="ec-sidenav-header">
-        <div class="ec-sidenav-brand">
-            <div class="ec-sidenav-logo">{logo_html}</div>
-            <div>
-                <h2>الكوتش أكاديمي</h2>
-                <p>القائمة الرئيسية</p>
-            </div>
-        </div>
-        <label for="ec-menu-chk" class="ec-close-btn">&times;</label>
-    </div>
-    {nav_link("🏠 الرئيسية", "home")}
-    {nav_link("ℹ️ من نحن", "about")}
-    {nav_link("⚽ البرامج التدريبية", "programs")}
-    {nav_link("👨‍🏫 صفحة الكباتن", "captains")}
-    {nav_link("📝 سجل لاعب جديد", "registration")}
-    {nav_link("❓ الأسئلة الشائعة", "faq")}
-    {nav_link("📞 اتصل بنا", "contact")}
-    {nav_link("📰 الأخبار", "news")}
-</nav>
-"""
-
-header_html = f"""
-<div class="ec-header">
-    <div class="ec-header-inner">
-        <a href="?page=home" target="_self" class="ec-logo-wrap">
-            <div class="ec-logo-img">{logo_html}</div>
-            <div class="ec-logo-txt">
-                <h1>الكوتش <span>أكاديمي</span></h1>
-                <p>أكاديمية كرة القدم المتخصصة</p>
-            </div>
-        </a>
-        <label for="ec-menu-chk" class="ec-menu-btn">☰ القائمة</label>
-    </div>
-</div>
-
-<input type="checkbox" id="ec-menu-chk" class="ec-menu-toggle" />
-
-<label for="ec-menu-chk" class="ec-overlay"></label>
-
-{sidenav_links}
-
-<div class="ec-spacer"></div>
-"""
-
-st.markdown(header_html, unsafe_allow_html=True)
-
-# ====================================================================================================
-# Page Routing
-# ====================================================================================================
-query_page = st.query_params.get("page", "")
-if isinstance(query_page, list):
-    query_page = query_page[0] if query_page else ""
-if query_page:
-    st.session_state.page = query_page
-
-page = st.session_state.page
-if page == "coaches":
-    page = "captains"
-st.session_state.page = page
-
-st.markdown('<div class="ec-container">', unsafe_allow_html=True)
-
-# ====================================================================================================
-# HOME PAGE
-# ====================================================================================================
-if page == "home":
-    st.markdown("""
-    <div class="ec-hero">
-        <h1>⚽ الكوتش <span>أكاديمي</span></h1>
-        <p class="ec-hero-desc">
-            أول أكاديمية متخصصة تركز على بناء اللاعب الشامل من الناحية الفنية والبدنية والنفسية والذهنية،
-            تحت إشراف مدربين معتمدين دوليًا.
-        </p>
-        <p class="ec-hero-slogan">نحن لا نصنع لاعبين فقط.. نحن نصنع قادة!</p>
-        <div class="ec-hero-btns">
-            <a href="?page=registration" target="_self" class="ec-btn ec-btn-gold">📝 سجل الآن</a>
-            <a href="?page=contact" target="_self" class="ec-btn ec-btn-outline">📞 اتصل بنا</a>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="ec-section-title">إنجازات الأكاديمية</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="ec-stats">
-        <div class="ec-stat-card">
-            <div class="ec-stat-icon">👥</div>
-            <span class="ec-stat-num">3000+</span>
-            <div class="ec-stat-label">لاعب مُدرَّب</div>
-        </div>
-        <div class="ec-stat-card">
-            <div class="ec-stat-icon">👨‍🏫</div>
-            <span class="ec-stat-num">12</span>
-            <div class="ec-stat-label">مدرب محترف</div>
-        </div>
-        <div class="ec-stat-card">
-            <div class="ec-stat-icon">🏆</div>
-            <span class="ec-stat-num">1000+</span>
-            <div class="ec-stat-label">لاعب محترف</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="ec-section-title">لماذا تختار الكوتش أكاديمي؟</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="ec-features">
-        <div class="ec-feature-card">
-            <div class="ec-feature-icon">🧠</div>
-            <h3>التدريب الذهني</h3>
-            <p>نركز على تطوير الذكاء الكروي والقدرة على اتخاذ القرارات السريعة والصحيحة داخل الملعب، باستخدام أحدث التقنيات في التدريب الذهني.</p>
-        </div>
-        <div class="ec-feature-card">
-            <div class="ec-feature-icon">🛡️</div>
-            <h3>بيئة آمنة محفزة</h3>
-            <p>نوفر بيئة تدريب آمنة تحترم الفروق الفردية وتشجع على الإبداع والتميز. جميع مدربينا حاصلون على شهادات السلامة والإسعافات الأولية.</p>
-        </div>
-        <div class="ec-feature-card">
-            <div class="ec-feature-icon">🤝</div>
-            <h3>شراكات مع الأندية</h3>
-            <p>لدينا شراكات مع أندية محلية ودولية لتمكين الموهوبين من الانضمام للمنتخبات والأندية الكبرى. نوفر فرص احتراف حقيقية.</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ====================================================================================================
-# ABOUT PAGE
-# ====================================================================================================
-elif page == "about":
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>من نحن</h1>
-        <p>الكوتش أكاديمي.. رؤية جديدة في عالم تدريب كرة القدم</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="ec-about-grid">
-        <div class="ec-about-visual">⚽</div>
-        <div>
-            <h2 style="color:#1e3a8a; font-size:1.8rem; margin:0 0 18px; font-weight:900;">تأسيس الأكاديمية</h2>
-            <p style="color:#334155; font-size:1rem; line-height:1.8;">
-                تأسست الأكاديمية عام 2020 على يد نخبة من المدربين المتخصصين بهدف
-                إنشاء مؤسسة رياضية متكاملة تُعنى ببناء اللاعب من جميع الجوانب.
-            </p>
-            <ul style="margin:16px 25px 0 0; color:#334155; font-size:0.95rem; line-height:2;">
-                <li><strong>كابتن ميخائيل كميل رؤف (ميخا)</strong> - المدير الفني والمؤسس</li>
-                <li><strong>كابتن أندرو</strong> - مدرب مهارات</li>
-                <li><strong>كابتن مينا</strong> - مدرب لياقة بدنية</li>
-            </ul>
-            <p style="margin-top:18px; color:#334155;">
-                📍 مكان التدريب: <strong>ملاعب مدرسة السلام المتطورة - أسيوط</strong>
-            </p>
-            <p style="margin-top:14px; font-weight:800; color:#1e3a8a; font-size:1.05rem;">
-                بدعم من الأب الروحي للأكاديمية: مستر / مؤنس منير
-            </p>
-        </div>
-    </div>
-
-    <div class="ec-mv-grid">
-        <div class="ec-mission-card">
-            <h3>🎯 رسالتنا</h3>
-            <p>تطوير جيل جديد من اللاعبين المبدعين القادرين على التألق محليًا ودوليًا، من خلال تقديم تدريب عصري يعتمد على أحدث الأساليب العلمية، مع غرس القيم والأخلاق الرياضية.</p>
-            <ul>
-                <li>تطوير المهارات الفنية الأساسية والمتقدمة</li>
-                <li>بناء اللياقة البدنية المخصصة لكل لاعب</li>
-                <li>تعزيز الذكاء الكروي والقدرات الذهنية</li>
-                <li>غرس القيم الرياضية والسلوك القيادي</li>
-            </ul>
-        </div>
-        <div class="ec-vision-card">
-            <h3>👁️ رؤيتنا</h3>
-            <p>أن نكون الوجهة الأولى لأي موهبة كروية في مصر والوطن العربي، والجسر الذي يعبر من خلاله الموهوبون إلى العالمية.</p>
-            <ul>
-                <li>صناعة لاعبين مؤهلين للدوريات العالمية</li>
-                <li>تطوير منهج تدريبي يُدرَّس في المعاهد الرياضية</li>
-                <li>المساهمة في تطوير كرة القدم العربية</li>
-                <li>بناء قاعدة بيانات للمواهب الكروية</li>
-            </ul>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="ec-info-banner" style="margin-top:40px;">
-        <h3>📊 أرقام وإحصائيات</h3>
-        <div class="ec-banner-stats">
-            <div class="ec-banner-stat"><span>🎓 6+</span>سنوات من التميز</div>
-            <div class="ec-banner-stat"><span>👥 3000+</span>لاعب تم تدريبهم</div>
-            <div class="ec-banner-stat"><span>🏆 25+</span>بطولة محلية</div>
-            <div class="ec-banner-stat"><span>⭐ 1000+</span>لاعب محترف</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ====================================================================================================
-# PROGRAMS PAGE
-# ====================================================================================================
-elif page == "programs":
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>البرامج التدريبية</h1>
-        <p>مواعيد تدريبية مصممة لكل فئة عمرية</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="ec-programs-grid">
-        <div class="ec-program-card">
-            <div class="ec-program-hdr">📅</div>
-            <div class="ec-program-body">
-                <h3>مواعيد تدريب السبت</h3>
-                <div class="ec-schedule-box">
-                    <div class="ec-schedule-item"><strong>🕔 ٥:٠٠ - ٦:٠٠ م</strong> ← 🏃‍♀️ بنات (جميع الأعمار)</div>
-                    <div class="ec-schedule-item"><strong>🕕 ٦:٠٠ - ٧:٣٠ م</strong> ← 🏃 بنين (الصف الأول - الخامس الابتدائي)</div>
-                    <div class="ec-schedule-item"><strong>🕢 ٧:٣٠ - ٩:٠٠ م</strong> ← 🏃 بنين (الصف السادس - الثاني الإعدادي)</div>
-                    <div style="margin-top:14px; color:#64748b; font-size:0.88rem;">📍 ملاعب مدرسة السلام المتطورة - أسيوط</div>
-                </div>
-            </div>
-        </div>
-        <div class="ec-program-card">
-            <div class="ec-program-hdr">📅</div>
-            <div class="ec-program-body">
-                <h3>مواعيد تدريب الخميس</h3>
-                <div class="ec-schedule-box">
-                    <div class="ec-schedule-item"><strong>🕟 ٤:٣٠ - ٦:٠٠ م</strong> ← 🏃‍♀️ بنات (جميع الأعمار)</div>
-                    <div class="ec-schedule-item"><strong>🕕 ٦:٠٠ - ٨:٠٠ م</strong> ← 🏃 بنين (الصف الأول - الخامس الابتدائي)</div>
-                    <div class="ec-schedule-item"><strong>🕗 ٨:٠٠ - ١٠:٠٠ م</strong> ← 🏃 بنين (الصف السادس - الثاني الإعدادي)</div>
-                    <div style="margin-top:14px; color:#64748b; font-size:0.88rem;">📍 ملاعب مدرسة السلام المتطورة - أسيوط</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="ec-program-card" style="margin-bottom:30px;">
-        <div class="ec-program-hdr">⚽</div>
-        <div class="ec-program-body">
-            <h3>ماذا يشمل التدريب؟</h3>
-            <div class="ec-schedule-box">
-                <h4 style="color:#1e3a8a; margin:0 0 14px; font-size:1.15rem;">🎯 محاور التدريب الأساسية:</h4>
-                <ul style="margin:0 20px 18px 0; color:#334155; line-height:2;">
-                    <li><strong>المهارات الفنية:</strong> التمرير - الاستلام - المراوغة - التسديد</li>
-                    <li><strong>اللياقة البدنية:</strong> السرعة - الرشاقة - القوة - التحمل</li>
-                    <li><strong>العمل الجماعي:</strong> التكتيك والانضباط الجماعي</li>
-                    <li><strong>الذكاء الكروي:</strong> القراءة التحليلية للملعب واتخاذ القرار</li>
-                    <li><strong>بناء الشخصية:</strong> الثقة بالنفس والقيم الرياضية</li>
-                </ul>
-                <h4 style="color:#1e3a8a; margin:0 0 14px; font-size:1.15rem;">💼 ما يقدمه الاكاديمه:</h4>
-                <ul style="margin:0 20px 0 0; color:#334155; line-height:2;">
-                    <li>ملابس تدريب رسمية (قميص - شورت)</li>
-                    <li>مسابقات دورية داخلية وخارجية</li>
-                    <li>تقييمات شهرية وتقارير تطور الأداء</li>
-                    <li>فيديوهات تحليل أداء للمتميزين</li>
-                    <li>فرص احتراف في الأندية الكبرى</li>
-                    <li>تأمين صحي للاعبين أثناء التدريبات</li>
-                </ul>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe); border-radius:24px; padding:30px; text-align:center;">
-        <h3 style="color:#1e3a8a; margin:0 0 12px;">📞 للتسجيل والاستفسار</h3>
-        <p style="color:#334155; margin:0 0 18px;">تواصل معنا الآن للحصول على عرض تجريبي مجاني</p>
-        <a href="?page=registration" target="_self" class="ec-btn ec-btn-gold" style="padding:12px 35px; font-size:1rem;">سجل الآن</a>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ====================================================================================================
-# CAPTAINS PAGE
-# ====================================================================================================
-elif page in ("coaches", "captains"):
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>صفحة الكباتن</h1>
-        <p>فريقنا من الكباتن والمدربين ذوي الخبرة والكفاءة</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    def get_img_base64(img_path):
-        try:
-            with open(img_path, "rb") as f:
-                return base64.b64encode(f.read()).decode()
-        except:
-            return None
-
-    mikhail_img = get_img_base64("C1.jpg")
-    mikhail_img_html = f'<img src="data:image/jpeg;base64,{mikhail_img}" alt="كابتن ميخائيل">' if mikhail_img else '<span>👨‍🏫</span>'
-
-    st.markdown(f"""
-    <div class="ec-lead-captain">
-        <div class="ec-lead-avatar">{mikhail_img_html}</div>
-        <div class="ec-lead-info">
-            <h3>كابتن / ميخائيل كميل رؤف</h3>
-            <div class="ec-title-badge">المدير الفني - مؤسس الأكاديمية</div>
-            <div class="ec-qualifications">
-                🎓 بكالوريوس تربية رياضية<br>
-                📜 رخصة تدريب CAF لمراحل البراعم<br>
-                📜 دبلومة الإعداد البدني المتقدم<br>
-                📜 دبلومة إصابات الملاعب والعلاج الطبيعي<br>
-                🏫 مدرس تربية رياضية بمدارس السلام الخاصة<br>
-                ⭐ خبرة أكثر من 10 سنوات في تدريب الناشئين
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    mina_img = get_img_base64("C2.jpg")
-    mina_img_html = f'<img src="data:image/jpeg;base64,{mina_img}" alt="كابتن مينا">' if mina_img else '<span>🧤</span>'
-
-    ebanob_img = get_img_base64("C3.jpg")
-    ebanob_img_html = f'<img src="data:image/jpeg;base64,{ebanob_img}" alt="كابتن أبانوب">' if ebanob_img else '<span>⚽</span>'
-
-    merola_img = get_img_base64("C4.jpg")
-    merola_img_html = f'<img src="data:image/jpeg;base64,{merola_img}" alt="كابتن ميرولا">' if merola_img else '<span>👩‍🏫</span>'
-
-    st.markdown(f"""
-    <div class="ec-captains-grid">
-        <div class="ec-captain-card">
-            <div class="ec-captain-avatar">{mina_img_html}</div>
-            <div class="ec-captain-info">
-                <h3>كابتن / مينا أسامة</h3>
-                <div class="ec-coach-title">شهرته / دبابة</div>
-                <div class="ec-coach-desc">
-                    • مدرب حراس براعم معتمد من الاتحاد الأفريقي<br>
-                    • حاصل على كورسات إسعافات أولية وإصابات ملاعب<br>
-                    • حاصل على كورس لرفع اللياقة البدنية الخاصة بلاعب كرة القدم
-                </div>
-            </div>
-        </div>
-        <div class="ec-captain-card">
-            <div class="ec-captain-avatar">{ebanob_img_html}</div>
-            <div class="ec-captain-info">
-                <h3>كابتن / أبانوب جمال</h3>
-                <div class="ec-coach-title">شهرته / بيبو</div>
-                <div class="ec-coach-desc">
-                    طالب في كلية تربية رياضية جامعة أسيوط<br>
-                    كابتن في أكاديمية الكوتش<br>
-                    حاصل على شهادة معتمدة من الاتحاد المصري مُعِد بدني<br>
-                    عضو في الشباب والرياضة<br>
-                    لديه قدرات على تناسق التمرينات المهاري + التكتيك
-                </div>
-            </div>
-        </div>
-        <div class="ec-captain-card">
-            <div class="ec-captain-avatar">{merola_img_html}</div>
-            <div class="ec-captain-info">
-                <h3>كابتن / ميرولا شهير</h3>
-                <div class="ec-coach-title">شهرتها / توتا</div>
-                <div class="ec-coach-desc">
-                    مدربة براعم وحاصلة على كورسات تدريبية في مجال كرة القدم
-                </div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="ec-info-banner">
-        <h3>🌟 فريق تدريب متكامل</h3>
-        <p>يجمع فريقنا بين الخبرات الأكاديمية والعملية لضمان أفضل تدريب</p>
-        <div class="ec-banner-stats">
-            <div class="ec-banner-stat"><span>12+</span>مدرب معتمد</div>
-            <div class="ec-banner-stat"><span>100+</span>دورة تدريبية</div>
-            <div class="ec-banner-stat"><span>20+</span>سنة خبرة</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ====================================================================================================
-# REGISTRATION PAGE (Firestore درع واقي + Google Sheets مصدر نهائي)
-# ====================================================================================================
-elif page == "registration":
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>تسجيل لاعب جديد</h1>
-        <p>انضم إلى الكوتش أكاديمي وابدأ رحلتك نحو الاحتراف</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    current_count = get_player_count()
-
-    if current_count >= MAX_PLAYERS:
-        st.markdown(f"""
-        <div style="background: #fef3c7; border: 2px solid #f59e0b; border-radius: 24px; padding: 50px 30px; text-align: center; max-width: 700px; margin: 0 auto;">
-            <div style="font-size: 4rem; margin-bottom: 20px;">🚫</div>
-            <h2 style="color: #1e3a8a; font-size: 2rem; margin-bottom: 20px; font-weight: 900;">التسجيل مغلق حالياً</h2>
-            <p style="color: #334155; font-size: 1.2rem; line-height: 1.8; margin-bottom: 30px;">
-                نعتذر، لقد اكتمل العدد المسموح به للتسجيل في الموسم الحالي.<br>
-                نشكركم على اهتمامكم ونتطلع لاستقبالكم في المواسم القادمة.
-            </p>
-            <a href="?page=contact" target="_self" class="ec-btn ec-btn-gold" style="padding: 16px 40px; font-size: 1.2rem;">📞 اتصل بنا للاستفسار</a>
-        </div>
-        """, unsafe_allow_html=True)
+    if st.session_state.role == "coach":
+        pages = {
+            "dashboard": "📊 لوحة التحكم",
+            "attendance": "✅ تسجيل الحضور",
+            "attendance_history": "📋 سجل الحضور",
+            "subscriptions_payments": "💳 الاشتراكات والمدفوعات",
+            "players": "👥 إدارة اللاعبين",
+            "finance_reports": "🔒 التقارير المالية"
+        }
     else:
-        with st.form("registration_form"):
-            st.markdown("### 📋 معلومات اللاعب")
-            col1, col2 = st.columns(2)
-            with col1:
-                player_name = st.text_input("اسم اللاعب الثلاثي *", placeholder="مثال: محمد أحمد محمود", 
-                                            value=st.session_state.get("reg_name", ""))
-                age_group = st.selectbox(
-                    "الفئة العمرية *",
-                    [
-                        "",
-                        "🏃‍♀️ بنات (جميع الأعمار)",
-                        "🏃 بنين (الصف الأول - الخامس الابتدائي)",
-                        "🏃 بنين (الصف السادس - الثاني الإعدادي)",
-                    ],
-                    index=0 if not st.session_state.get("reg_age") else 
-                          ["", "🏃‍♀️ بنات (جميع الأعمار)", "🏃 بنين (الصف الأول - الخامس الابتدائي)", "🏃 بنين (الصف السادس - الثاني الإعدادي)"].index(st.session_state.get("reg_age", ""))
-                )
-            with col2:
-                position = st.selectbox(
-                    "المركز المفضل",
-                    ["", "حارس مرمى", "مدافع", "لاعب وسط", "مهاجم", "أكثر من مركز"],
-                    index=0 if not st.session_state.get("reg_pos") else 
-                          ["", "حارس مرمى", "مدافع", "لاعب وسط", "مهاجم", "أكثر من مركز"].index(st.session_state.get("reg_pos", ""))
-                )
+        pages = {
+            "dashboard": "📊 ملخصي",
+            "my_attendance": "📋 سجل الحضور",
+            "my_subscription": "💳 اشتراكي ومدفوعاتي"
+        }
 
-            st.markdown("### 👨‍👩‍👦 معلومات ولي الأمر")
-            col1, col2 = st.columns(2)
-            with col1:
-                parent_phone = st.text_input("رقم الهاتف *", placeholder="01XXXXXXXXX",
-                                             value=st.session_state.get("reg_phone", ""))
+    with st.container():
+        st.markdown('<div class="nav-container">', unsafe_allow_html=True)
+        num_buttons = len(pages) + 1
+        cols = st.columns(num_buttons)
+        for idx, (page_key, page_label) in enumerate(pages.items()):
+            with cols[idx]:
+                is_active = (st.session_state.current_page == page_key)
+                if st.button(page_label, key=f"nav_{page_key}", use_container_width=True, type="primary" if is_active else "secondary"):
+                    navigate_to(page_key)
+        with cols[-1]:
+            if st.button("🚪 تسجيل الخروج", key="nav_logout", use_container_width=True):
+                logout()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            notes = st.text_area("ملاحظات إضافية (اختياري)", placeholder="أي معلومات إضافية تود إضافتها...",
-                                 value=st.session_state.get("reg_notes", ""))
+# =============================================================================
+# جدار المصادقة (كلمة مرور واحدة للتقرير المالية وإدارة اللاعبين)
+# =============================================================================
+def auth_wall(page_type="finance"):
+    if page_type == "finance":
+        st.markdown("## 🔐 المصادقة المطلوبة (التقارير المالية)")
+    else:
+        st.markdown("## 🔐 المصادقة المطلوبة (إدارة اللاعبين)")
+    st.markdown("الرجاء إدخال كلمة المرور للوصول.")
+    password = st.text_input("كلمة المرور", type="password", key=f"{page_type}_pass_input")
+    if st.button("تحقق", key=f"{page_type}_auth_btn"):
+        correct_password = st.secrets.get("app", {}).get("finance_password", "")
+        if password == correct_password:
+            if page_type == "finance":
+                st.session_state.finance_authenticated = True
+            else:
+                st.session_state.players_authenticated = True
+            st.rerun()
+        else:
+            st.error("❌ كلمة المرور غير صحيحة")
+    st.stop()
 
-            submitted = st.form_submit_button("📝 تقديم طلب التسجيل", use_container_width=True)
+# =============================================================================
+# صفحات الكابتن
+# =============================================================================
+def coach_dashboard_page():
+    st.markdown("# 📊 لوحة التحكم")
+    st.markdown(f"مرحباً، **{st.session_state.username}** 👋")
+    st.markdown("---")
+    users = get_all_users()
+    players = [u for u in users if u.get("role") == "player"]
+    attendance = get_all_attendance()
+    today_attendance = get_today_attendance()
 
-            if submitted:
-                st.session_state.reg_name = player_name
-                st.session_state.reg_age = age_group
-                st.session_state.reg_pos = position
-                st.session_state.reg_phone = parent_phone
-                st.session_state.reg_notes = notes
+    # إحصائيات عامة
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{len(players)}</div><div class="stat-label">👥 إجمالي اللاعبين</div></div>', unsafe_allow_html=True)
+    with col2:
+        present_today = len([a for a in today_attendance if a.get("status") == "Present"])
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{present_today}</div><div class="stat-label">✅ الحضور اليوم</div></div>', unsafe_allow_html=True)
+    with col3:
+        absent_today = len([a for a in today_attendance if a.get("status") == "Absent"])
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{absent_today}</div><div class="stat-label">❌ الغياب اليوم</div></div>', unsafe_allow_html=True)
+    with col4:
+        not_recorded = len(players) - len(today_attendance)
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{max(0, not_recorded)}</div><div class="stat-label">⏳ لم يُسجل</div></div>', unsafe_allow_html=True)
 
-                if not player_name or not age_group or not parent_phone:
-                    st.session_state.registration_error = "⚠️ يرجى ملء جميع الحقول المطلوبة"
-                    st.rerun()
+    # إحصائيات حسب الفئات العمرية
+    st.markdown("---")
+    st.markdown("### 📊 إحصائيات الفئات العمرية")
+    cat_data = {cat: {"total": 0, "present": 0, "absent": 0} for cat in AGE_CATEGORIES}
+    for p in players:
+        norm = normalize_age_group(p.get("age_group", ""))
+        if norm:
+            cat_data[norm]["total"] += 1
+            name = p["username"].strip()
+            for a in today_attendance:
+                if a["player_name"].strip() == name:
+                    if a["status"] == "Present":
+                        cat_data[norm]["present"] += 1
+                    else:
+                        cat_data[norm]["absent"] += 1
+                    break
+    cols = st.columns(len(AGE_CATEGORIES))
+    for i, (cat, stats) in enumerate(cat_data.items()):
+        with cols[i]:
+            st.markdown(f"""
+            <div class="stat-card-small">
+                <div class="cat-name">{cat}</div>
+                <div class="cat-detail">👥 {stats['total']}</div>
+                <div class="cat-detail" style="margin-top:4px;">✅ {stats['present']} &nbsp; ❌ {stats['absent']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+def coach_attendance_page():
+    st.markdown("# ✅ تسجيل الحضور والغياب (حسب الفئة العمرية)")
+    users = get_all_users()
+
+    # تجميع اللاعبين حسب الفئات المعيارية
+    cat_players = {cat: [] for cat in AGE_CATEGORIES}
+    for u in users:
+        if u.get("role") != "player":
+            continue
+        norm = normalize_age_group(u.get("age_group", ""))
+        if norm:
+            cat_players[norm].append(u["username"].strip())
+
+    if not any(cat_players.values()):
+        st.warning("لا يوجد لاعبين مسجلين بعد.")
+        return
+
+    st.date_input("📅 تاريخ التسجيل", value=date.today())
+    st.markdown("---")
+
+    # اختيار الفئة
+    selected_cat = st.selectbox("اختر الفئة العمرية", AGE_CATEGORIES)
+    players = cat_players.get(selected_cat, [])
+    if not players:
+        st.info(f"لا يوجد لاعبين في فئة {selected_cat}")
+        return
+
+    st.markdown(f"### 🏷️ {selected_cat} ({len(players)} لاعب)")
+
+    # أزرار جماعية
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button(f"✅ تسجيل حضور كل {selected_cat}", key=f"present_all_{selected_cat}"):
+            success, msg = record_multiple_attendance(players, "Present", st.session_state.username)
+            if success:
+                st.success(msg)
+                st.toast(f"✅ تم تسجيل حضور فئة {selected_cat}!", icon="✅")
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error(msg)
+    with col2:
+        if st.button(f"❌ تسجيل غياب كل {selected_cat}", key=f"absent_all_{selected_cat}"):
+            success, msg = record_multiple_attendance(players, "Absent", st.session_state.username)
+            if success:
+                st.success(msg)
+                st.toast(f"✅ تم تسجيل غياب فئة {selected_cat}!", icon="✅")
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error(msg)
+
+    # اختيار محددين
+    st.markdown("---")
+    present_sel = st.multiselect("اختر الحاضرين", players, key=f"present_{selected_cat}")
+    if st.button("تسجيل حضور المحددين", key=f"btn_pres_{selected_cat}"):
+        if present_sel:
+            success, msg = record_multiple_attendance(present_sel, "Present", st.session_state.username)
+            if success:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+        else:
+            st.warning("⚠️ اختر لاعباً واحداً على الأقل")
+
+    remaining = [p for p in players if p not in present_sel]
+    absent_sel = st.multiselect("اختر الغائبين", remaining, key=f"absent_{selected_cat}")
+    if st.button("تسجيل غياب المحددين", key=f"btn_abs_{selected_cat}"):
+        if absent_sel:
+            success, msg = record_multiple_attendance(absent_sel, "Absent", st.session_state.username)
+            if success:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+def coach_attendance_history_page():
+    st.markdown("# 📋 سجل الحضور")
+
+    # فلاتر
+    users = get_all_users()
+    player_list = ["الكل"] + [u["username"].strip() for u in users if u.get("role") == "player"]
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        filter_player = st.selectbox("اللاعب", player_list)
+    with c2:
+        filter_status = st.selectbox("الحالة", ["الكل", "Present", "Absent"], format_func=lambda x: "الكل" if x == "الكل" else ("✅ حاضر" if x == "Present" else "❌ غائب"))
+    with c3:
+        filter_date = st.date_input("التاريخ", value=None)
+
+    records = get_all_attendance()
+    if filter_player != "الكل":
+        records = [r for r in records if r["player_name"].strip() == filter_player]
+    if filter_status != "الكل":
+        records = [r for r in records if r["status"] == filter_status]
+    if filter_date:
+        records = [r for r in records if r["date"] == filter_date.strftime("%Y-%m-%d")]
+
+    if records:
+        df = pd.DataFrame(records)
+        df = df.rename(columns={"player_name": "اللاعب", "date": "التاريخ", "status": "الحالة", "recorded_by": "سجل بواسطة"})
+        df["الحالة"] = df["الحالة"].apply(lambda x: "✅ حاضر" if x == "Present" else "❌ غائب")
+        st.dataframe(df.sort_values("التاريخ", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("لا توجد سجلات مطابقة للفلاتر")
+
+    # --------------------------------------
+    # إحصائيات منظمة
+    # --------------------------------------
+    st.markdown("---")
+    st.markdown("## 📊 إحصائيات الحضور")
+    all_att = get_all_attendance()
+    total_sessions = len(all_att)
+    overall_present = sum(1 for r in all_att if r["status"] == "Present")
+    st.markdown(f"**إجمالي التسجيلات:** {total_sessions}  |  **✅ حضور:** {overall_present}  |  **❌ غياب:** {total_sessions - overall_present}")
+
+    # إحصائيات لكل فئة عمرية
+    st.markdown("### 📋 توزيع الحضور حسب الفئة العمرية")
+    # بناء خريطة لاعب -> فئة
+    user_map = {}
+    for u in users:
+        if u.get("role") == "player":
+            norm = normalize_age_group(u.get("age_group", ""))
+            if norm:
+                user_map[u["username"].strip()] = norm
+
+    cat_stats = {cat: {"total": 0, "present": 0, "absent": 0} for cat in AGE_CATEGORIES}
+    for r in all_att:
+        cat = user_map.get(r["player_name"].strip())
+        if cat:
+            cat_stats[cat]["total"] += 1
+            if r["status"] == "Present":
+                cat_stats[cat]["present"] += 1
+            else:
+                cat_stats[cat]["absent"] += 1
+
+    stat_cols = st.columns(len(AGE_CATEGORIES))
+    for i, (cat, sts) in enumerate(cat_stats.items()):
+        t = sts["total"]
+        p = sts["present"]
+        a = sts["absent"]
+        rate = f"{p/t*100:.1f}%" if t > 0 else "0%"
+        with stat_cols[i]:
+            st.markdown(f"""
+            <div class="stat-card-small">
+                <div class="cat-name">{cat}</div>
+                <div class="cat-detail">👥 {t}</div>
+                <div class="cat-detail">✅ {p}</div>
+                <div class="cat-detail">❌ {a}</div>
+                <div class="cat-detail">📊 {rate}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+def coach_subscriptions_payments_page():
+    st.markdown("# 💳 الاشتراكات والمدفوعات")
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ تسجيل اشتراك جديد", "✏️ تعديل اشتراك", "💰 إدارة المدفوعات", "📋 عرض الاشتراكات"])
+
+    # تبويب تسجيل جديد
+    with tab1:
+        st.markdown("### ➕ تسجيل اشتراك جديد (مع دفعة أولى)")
+        users = get_all_users()
+        existing = {f["player_name"] for f in get_all_finance()}
+        players = [u["username"].strip() for u in users if u.get("role") == "player" and u["username"].strip() not in existing]
+        if not players:
+            st.info("جميع اللاعبين لديهم اشتراكات.")
+        else:
+            sel = st.selectbox("اختر اللاعب", players, key="new_finance_player")
+            c1, c2 = st.columns(2)
+            with c1: fee = st.number_input("قيمة الاشتراك", min_value=0.0, step=50.0, key="new_fee")
+            with c2: status = st.selectbox("الحالة", ["Active", "Expired", "Suspended"], format_func=lambda x: "🟢 نشط" if x == "Active" else ("🔴 منتهي" if x == "Expired" else "🟡 معلق"), key="new_status")
+            c3, c4 = st.columns(2)
+            with c3: start = st.date_input("بداية الموسم", value=date.today(), key="new_start")
+            with c4: end = st.date_input("نهاية الموسم", value=date.today() + timedelta(days=90), key="new_end")
+            st.markdown("---")
+            st.markdown("#### 💰 الدفعة الأولى")
+            p1, p2 = st.columns(2)
+            with p1: amt = st.number_input("المبلغ", min_value=0.0, value=fee, step=50.0, key="new_amt")
+            with p2: method = st.selectbox("طريقة الدفع", ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"], key="new_method")
+            pdate = st.date_input("تاريخ الدفع", value=date.today(), key="new_pdate")
+            notes = st.text_area("ملاحظات", key="new_notes")
+            if st.button("💾 حفظ الاشتراك والدفعة", key="btn_new_finance"):
+                if fee <= 0 or amt <= 0:
+                    st.error("يرجى إدخال قيم صحيحة")
                 else:
-                    current_count = get_player_count()
-                    if current_count >= MAX_PLAYERS:
-                        st.session_state.registration_error = f"⚠️ عذراً، تم الوصول للحد الأقصى ({MAX_PLAYERS} لاعب)."
+                    success, msg = add_or_update_finance_record(sel, fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), status, amt, method, pdate.strftime("%Y-%m-%d"), notes)
+                    if success:
+                        st.success("✅ تم حفظ الاشتراك والدفعة بنجاح!")
+                        st.toast("✅ اشتراك جديد مع دفعة!", icon="💳")
+                        time.sleep(2)
                         st.rerun()
                     else:
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        data_dict = {
-                            'player_name': player_name,
-                            'age_group': age_group,
-                            'position': position,
-                            'parent_phone': parent_phone,
-                            'notes': notes,
-                            'timestamp': timestamp
-                        }
+                        st.error(msg)
 
-                        # الخطوة 1: التحقق السريع من التكرار في Firestore
-                        if check_duplicate_in_firestore(data_dict):
-                            st.session_state.registration_error = "⚠️ هذه البيانات مسجلة مسبقاً."
-                            st.rerun()
+    # تبويب تعديل اشتراك
+    with tab2:
+        st.markdown("### ✏️ تعديل بيانات الاشتراك")
+        finance_records = get_all_finance()
+        if not finance_records:
+            st.info("لا توجد اشتراكات")
+        else:
+            all_players = [f["player_name"] for f in finance_records]
+            payment_filter = st.selectbox("تصنيف حسب حالة الدفع", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"], key="edit_filter")
+            filtered_players = [p for p in all_players if payment_filter == "الكل" or get_player_payment_status(p) == payment_filter]
+            if not filtered_players:
+                st.info("لا يوجد لاعبين مطابقين للتصنيف المحدد.")
+            else:
+                sel = st.selectbox("اختر اللاعب", filtered_players, key="edit_finance_player")
+                current = next((f for f in finance_records if f["player_name"] == sel), None)
+                if current:
+                    c1, c2 = st.columns(2)
+                    with c1: fee = st.number_input("قيمة الاشتراك", value=float(current.get("season_fee", 0)), step=50.0, key="edit_fee")
+                    with c2:
+                        opts = ["Active", "Expired", "Suspended"]
+                        idx = opts.index(current.get("subscription_status", "Active")) if current.get("subscription_status", "Active") in opts else 0
+                        status = st.selectbox("الحالة", opts, index=idx, format_func=lambda x: "🟢 نشط" if x == "Active" else ("🔴 منتهي" if x == "Expired" else "🟡 معلق"), key="edit_status")
+                    c3, c4 = st.columns(2)
+                    with c3:
+                        dstart = datetime.strptime(current.get("start_date", date.today().strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+                        start = st.date_input("بداية الموسم", value=dstart, key="edit_start")
+                    with c4:
+                        dend = datetime.strptime(current.get("end_date", (date.today() + timedelta(days=90)).strftime("%Y-%m-%d")), "%Y-%m-%d").date()
+                        end = st.date_input("نهاية الموسم", value=dend, key="edit_end")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("📝 تحديث الاشتراك", key="btn_update_finance"):
+                            success, msg = add_or_update_finance_record(sel, fee, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), status, 0)
+                            if success:
+                                st.success("✅ تم تحديث الاشتراك بنجاح!")
+                                st.toast("✅ تم تحديث الاشتراك!", icon="✏️")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with col2:
+                        if st.button("🗑️ حذف الاشتراك", key="btn_delete_finance"):
+                            if delete_finance_record(sel):
+                                st.success("✅ تم حذف الاشتراك بنجاح!")
+                                st.toast("✅ تم حذف الاشتراك!", icon="🗑️")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ فشل حذف الاشتراك")
 
-                        # الخطوة 2: الحفظ الفوري في Firestore (أقل من 100ms)
-                        success, msg = save_to_firestore(data_dict)
-
+    # تبويب إدارة المدفوعات
+    with tab3:
+        st.markdown("### 💰 إدارة المدفوعات (تعديل / حذف)")
+        payments = get_all_payments()
+        if not payments:
+            st.info("لا توجد مدفوعات مسجلة")
+        else:
+            df = pd.DataFrame(payments)
+            df["row_index"] = range(2, len(payments) + 2)
+            df["payment_status"] = df["player_name"].apply(get_player_payment_status)
+            df_display = df.rename(columns={"player_name": "اللاعب", "amount": "المبلغ", "payment_method": "الطريقة", "payment_date": "التاريخ", "notes": "ملاحظات", "payment_status": "حالة الدفع"})
+            filter_payment = st.selectbox("تصنيف حسب حالة الدفع", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"], key="payment_filter")
+            if filter_payment != "الكل":
+                df_display = df_display[df_display["حالة الدفع"] == filter_payment]
+            st.dataframe(df_display[["row_index", "اللاعب", "المبلغ", "الطريقة", "التاريخ", "ملاحظات", "حالة الدفع"]], use_container_width=True, hide_index=True)
+            st.markdown("---")
+            st.markdown("#### تعديل دفعة")
+            row_num = st.number_input("أدخل رقم الصف (row_index) للتعديل", min_value=2, step=1, key="edit_row")
+            selected_row = df[df["row_index"] == row_num]
+            if not selected_row.empty:
+                row = selected_row.iloc[0]
+                st.write(f"اللاعب: {row['player_name']} | المبلغ الحالي: {row['amount']} | حالة الدفع: {get_player_payment_status(row['player_name'])}")
+                new_amt = st.number_input("المبلغ الجديد", value=float(row['amount']), step=50.0, key="edit_payment_amt")
+                new_method = st.selectbox("طريقة الدفع", ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"], index=["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"].index(row['payment_method']) if row['payment_method'] in ["Cash", "InstaPay", "Vodafone Cash", "Bank Transfer", "Other"] else 0, key="edit_payment_method")
+                new_date = st.date_input("تاريخ الدفع", value=datetime.strptime(row['payment_date'], "%Y-%m-%d").date(), key="edit_payment_date")
+                new_notes = st.text_area("ملاحظات", value=row.get('notes', ''), key="edit_payment_notes")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("📝 تحديث الدفعة", key="btn_update_payment"):
+                        success, msg = update_payment_record(row_num, row['player_name'], float(row['amount']), new_amt, new_method, new_date.strftime("%Y-%m-%d"), new_notes)
                         if success:
-                            # الخطوة 3: إرسال إشعار Telegram (صامت)
-                            try:
-                                telegram_msg = f"""
-📢 <b>تسجيل جديد - الكوتش أكاديمي</b>
-━━━━━━━━━━━━━━━━━━━━
-👤 <b>الاسم:</b> {player_name}
-📅 <b>الفئة:</b> {age_group}
-📞 <b>الهاتف:</b> {parent_phone}
-⏰ <b>الوقت:</b> {timestamp}
-━━━━━━━━━━━━━━━━━━━━
-                                """
-                                send_telegram_message(telegram_msg)
-                            except Exception:
-                                pass
-
-                            for key in ["reg_name", "reg_age", "reg_pos", "reg_phone", "reg_notes"]:
-                                if key in st.session_state:
-                                    del st.session_state[key]
-                            st.session_state.show_success = True
-                            st.session_state.registration_submitted = True
-                            st.session_state.registration_error = None
+                            st.success("✅ تم تحديث الدفعة بنجاح!")
+                            st.toast("✅ تم تحديث الدفعة!", icon="💰")
+                            time.sleep(2)
                             st.rerun()
                         else:
-                            st.session_state.registration_error = msg
+                            st.error(msg)
+                with col2:
+                    if st.button("🗑️ حذف الدفعة", key="btn_delete_payment"):
+                        success, msg = delete_payment_record(row_num, row['player_name'])
+                        if success:
+                            st.success("✅ تم حذف الدفعة بنجاح!")
+                            st.toast("✅ تم حذف الدفعة!", icon="🗑️")
+                            time.sleep(2)
                             st.rerun()
+                        else:
+                            st.error(msg)
+            else:
+                st.warning("رقم الصف غير موجود")
 
-        # رسالة خطأ
-        if st.session_state.get("registration_error"):
-            st.markdown(
-                f'<div class="ec-error-msg">{st.session_state.registration_error}</div>',
-                unsafe_allow_html=True,
-            )
-            st.session_state.registration_error = None
+    # تبويب عرض الاشتراكات
+    with tab4:
+        st.markdown("### 📋 الاشتراكات المسجلة")
+        finance = get_all_finance()
+        if finance:
+            df = pd.DataFrame(finance)
+            df = df.rename(columns={"player_name": "اللاعب", "season_fee": "القيمة", "start_date": "بداية", "end_date": "نهاية", "subscription_status": "الحالة", "total_paid": "المدفوع"})
+            df["المدفوع"] = df["اللاعب"].apply(calculate_total_paid_from_payments)
+            df["المتبقي"] = df.apply(lambda r: max(0, float(r["القيمة"]) - float(r["المدفوع"])), axis=1)
+            df["حالة الدفع"] = df["اللاعب"].apply(get_player_payment_status)
+            sub_filter = st.selectbox("تصنيف حسب حالة الدفع", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"], key="sub_filter")
+            if sub_filter != "الكل":
+                df = df[df["حالة الدفع"] == sub_filter]
+            def status_color(s):
+                if s == "Active": return "🟢 نشط"
+                elif s == "Expired": return "🔴 منتهي"
+                else: return "🟡 معلق"
+            df["الحالة"] = df["الحالة"].apply(status_color)
+            st.dataframe(df[["اللاعب", "القيمة", "المدفوع", "المتبقي", "بداية", "نهاية", "الحالة", "حالة الدفع"]], use_container_width=True, hide_index=True)
+        else:
+            st.info("لا توجد اشتراكات")
 
-        # رسالة نجاح
-        if st.session_state.get("show_success", False):
-            st.markdown(
-                '<div class="ec-success-msg">✅ تم إرسال طلب التسجيل بنجاح! سنتواصل معكم خلال 24 ساعة.</div>',
-                unsafe_allow_html=True,
-            )
-            st.session_state.show_success = False
+def coach_players_page():
+    if not st.session_state.get("players_authenticated", False):
+        auth_wall("players")
+        return
 
-# ====================================================================================================
-# FAQ PAGE
-# ====================================================================================================
-elif page == "faq":
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>الأسئلة الشائعة</h1>
-        <p>إجابات على أكثر الأسئلة شيوعًا من أولياء الأمور واللاعبين</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("# 👥 إدارة اللاعبين (محمية بكلمة مرور)")
 
-    faqs = [
-        ("ما هو سن القبول في الأكاديمية؟", "نستقبل اللاعبين والبنات من سن الصف الأول الابتدائي وحتى الصف الثاني الإعدادي. لدينا فئات عمرية مختلفة لكل مرحلة لضمان تدريب مناسب لكل سن."),
-        ("ما هي مدة البرنامج التدريبي؟", "الموسم التدريبي يمتد لمدة 10 أشهر تقريبًا، من بداية سبتمبر إلى نهاية يونيو. التدريبات تقام أيام السبت والخميس في الفترة المسائية حسب الجدول المحدد لكل فئة."),
-        ("هل يوجد تدريب للبنات؟", "نعم، لدينا برامج تدريبية مخصصة للبنات في أيام السبت والخميس مع مدربات متخصصات ومؤهلات، وبيئة مناسبة تلبي احتياجاتهن الرياضية والنفسية مع مراعاة الخصوصية الكاملة."),
-        ("هل يوجد تدريب للمبتدئين؟", "بالتأكيد! لدينا برامج خاصة للمبتدئين تركز على تعلم أساسيات كرة القدم من الصفر، تطوير المهارات الحركية الأساسية، بناء الثقة بالنفس وحب الرياضة، وتدريبات ترفيهية محفزة للتعلم."),
-        ("كيف يتم تقييم اللاعبين؟", "نوفر نظام تقييم شامل يشمل: تقييم فني دوري للمهارات، متابعة التطور البدني، تقارير شهرية عن الأداء، لقاءات دورية مع أولياء الأمور، فيديوهات تحليل أداء للمتميزين، وشهادات تقدير للمتفوقين."),
-        ("أين تقام التدريبات؟", "تقام جميع التدريبات على ملاعب مدرسة السلام المتطورة في أسيوط، وهي ملاعب مجهزة بأحدث المعدات وتوفر بيئة آمنة ومناسبة للتدريب."),
-        ("ما هي سياسة الرسوم والدفع؟", "تختلف الرسوم حسب الفئة العمرية وعدد أيام التدريب. نقدم: نظام تقسيط شهري مرن. يرجى التواصل معنا لمعرفة التفاصيل."),
-    ]
+    # زر المزامنة (إن وجد ملف خارجي)
+    if "external_sheet" in st.secrets:
+        if st.button("🔄 مزامنة اللاعبين من الملف الخارجي", use_container_width=True):
+            success, msg = import_players_from_external()
+            if success:
+                st.success(msg)
+                st.toast("✅ تمت المزامنة بنجاح!", icon="🔄")
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error(msg)
+    else:
+        st.info("ℹ️ لم يتم إعداد ملف خارجي حالياً. يمكنك إضافته عبر secrets.toml.")
 
-    for question, answer in faqs:
-        st.markdown(f"""
-        <div class="ec-faq-card">
-            <h4>❓ {question}</h4>
-            <p>{answer}</p>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown("---")
 
-# ====================================================================================================
-# CONTACT PAGE
-# ====================================================================================================
-elif page == "contact":
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>اتصل بنا</h1>
-        <p>نسعد بتواصلكم معنا في أي وقت</p>
-    </div>
-    """, unsafe_allow_html=True)
+    users = get_all_users()
+    players = [u for u in users if u.get("role") == "player"]
+    if not players:
+        st.info("لا يوجد لاعبين مسجلين.")
+        return
 
-    col_form, col_info = st.columns(2)
+    # اختيار لاعب (يظهر تحت زر المزامنة)
+    sel = st.selectbox("اختر لاعب", [p["username"].strip() for p in players])
+    if sel:
+        pdata = next(p for p in players if p["username"].strip() == sel)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("### معلومات اللاعب")
+            st.write(f"**الاسم:** {pdata['username']}")
+            st.write(f"**كلمة المرور:** {pdata['password']}")
+            st.write(f"**الفئة:** {pdata.get('age_group', 'غير محددة')}")
+            stats = get_attendance_stats(sel)
+            st.write(f"**نسبة الحضور:** {stats['percentage']}%")
+        with c2:
+            st.markdown("### الاشتراك")
+            sub = get_player_finance(sel)
+            if sub:
+                st.write(f"**القيمة:** {sub.get('season_fee')} جنيه")
+                st.write(f"**المدفوع:** {sub.get('total_paid')} جنيه")
+                remaining = max(0, float(sub.get('season_fee', 0)) - float(sub.get('total_paid', 0)))
+                st.write(f"**المتبقي:** {remaining:,.0f} جنيه")
+                st.write(f"**الحالة:** {'🟢 نشط' if sub.get('subscription_status') == 'Active' else '🔴 غير نشط'}")
+            else:
+                st.write("لا يوجد اشتراك مسجل.")
 
-    with col_form:
-        with st.form("contact_form"):
-            st.markdown("### 📬 أرسل لنا رسالة")
-            contact_name = st.text_input("الاسم *", placeholder="اسمك الكامل")
-            contact_phone = st.text_input("رقم الهاتف *", placeholder="01XXXXXXXXX")
-            inquiry_type = st.selectbox(
-                "نوع الاستفسار *",
-                ["", "استفسار عام", "تسجيل لاعب جديد", "مواعيد التدريب", "الرسوم والاشتراكات", "شكوى أو اقتراح", "أخرى"],
-            )
-            contact_message = st.text_area("الرسالة *", placeholder="اكتب رسالتك هنا...")
+    st.markdown("---")
+    st.markdown("### 📋 جميع اللاعبين (مع كلمات المرور)")
+    data = []
+    for p in players:
+        name = p["username"].strip()
+        age_group = p.get("age_group", "")
+        stats = get_attendance_stats(name)
+        sub = get_player_finance(name)
+        data.append({
+            "اللاعب": name,
+            "الفئة": age_group,
+            "كلمة المرور": p["password"],
+            "نسبة الحضور": f"{stats['percentage']}%",
+            "الاشتراك": "🟢 نشط" if sub and sub.get("subscription_status") == "Active" else "🔴 غير نشط"
+        })
+    st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
 
-            contact_submitted = st.form_submit_button("📨 إرسال الرسالة", use_container_width=True)
+def coach_finance_reports_page():
+    if not st.session_state.get("finance_authenticated", False):
+        auth_wall("finance")
+        return
 
-            if contact_submitted:
-                if not contact_name or not contact_phone or not inquiry_type or not contact_message:
-                    st.markdown('<div class="ec-error-msg">⚠️ يرجى ملء جميع الحقول المطلوبة</div>', unsafe_allow_html=True)
+    st.markdown("# 📊 التقارير المالية")
+    finance = get_all_finance()
+    if not finance:
+        st.info("لا توجد بيانات مالية")
+        return
+
+    df = pd.DataFrame(finance)
+    df["season_fee"] = df["season_fee"].astype(float)
+    df["total_paid"] = df["player_name"].apply(lambda name: calculate_total_paid_from_payments(name))
+    df["remaining"] = df["season_fee"] - df["total_paid"]
+
+    def get_payment_status(row):
+        if row["remaining"] <= 0:
+            return "مدفوع بالكامل"
+        elif row["total_paid"] > 0:
+            return "مدفوع جزئيًا"
+        else:
+            return "غير مدفوع"
+    df["payment_status"] = df.apply(get_payment_status, axis=1)
+
+    filter_option = st.selectbox("عرض اللاعبين:", ["الكل", "مدفوع بالكامل", "مدفوع جزئيًا", "غير مدفوع"])
+    if filter_option != "الكل":
+        df = df[df["payment_status"] == filter_option]
+
+    total_fee = df["season_fee"].sum()
+    total_paid = df["total_paid"].sum()
+    total_remaining = df["remaining"].sum()
+    collection_rate = (total_paid / total_fee * 100) if total_fee > 0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_fee:,.0f}</div><div class="stat-label">💰 إجمالي المستحق</div></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_paid:,.0f}</div><div class="stat-label">💵 إجمالي المدفوع</div></div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{total_remaining:,.0f}</div><div class="stat-label">📉 إجمالي المتبقي</div></div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{collection_rate:.1f}%</div><div class="stat-label">📈 نسبة التحصيل</div></div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.dataframe(df[["player_name", "season_fee", "total_paid", "remaining", "payment_status", "subscription_status"]].rename(
+        columns={"player_name": "اللاعب", "season_fee": "القيمة", "total_paid": "المدفوع", "remaining": "المتبقي", "payment_status": "حالة الدفع", "subscription_status": "حالة الاشتراك"}
+    ), use_container_width=True, hide_index=True)
+
+# =============================================================================
+# صفحات اللاعب
+# =============================================================================
+def player_dashboard_page():
+    st.markdown("# 📊 ملخصي")
+    st.markdown(f"مرحباً **{st.session_state.username}** 👋")
+    stats = get_attendance_stats(st.session_state.username)
+    c1, c2, c3 = st.columns(3)
+    with c1: st.markdown(f'<div class="stat-card"><div class="stat-number">{stats["percentage"]}%</div><div class="stat-label">نسبة الحضور</div></div>', unsafe_allow_html=True)
+    with c2: st.markdown(f'<div class="stat-card"><div class="stat-number">{stats["present"]}</div><div class="stat-label">الحضور</div></div>', unsafe_allow_html=True)
+    with c3: st.markdown(f'<div class="stat-card"><div class="stat-number">{stats["absent"]}</div><div class="stat-label">الغياب</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("## 💳 الاشتراك والمدفوعات")
+    summ = get_payment_summary(st.session_state.username)
+    sub = get_player_finance(st.session_state.username)
+    if sub:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.metric("القيمة", f"{summ['season_fee']:,.0f} جنيه")
+        with c2: st.metric("المدفوع", f"{summ['total_paid']:,.0f} جنيه")
+        with c3: st.metric("المتبقي", f"{summ['remaining']:,.0f} جنيه")
+        with c4: st.metric("الحالة", "🟢 نشط" if summ['status'] == "Active" else "🔴 غير نشط")
+        st.write(f"الموسم: {sub.get('start_date')} - {sub.get('end_date')}")
+
+def player_attendance_page():
+    st.markdown("# 📋 سجل حضوري")
+    records = get_player_attendance(st.session_state.username)
+    if records:
+        df = pd.DataFrame(records)[["date", "status"]].rename(columns={"date": "التاريخ", "status": "الحالة"})
+        df["الحالة"] = df["الحالة"].apply(lambda x: "✅ حاضر" if x == "Present" else "❌ غائب")
+        st.dataframe(df.sort_values("التاريخ", ascending=False), hide_index=True)
+
+def player_subscription_page():
+    st.markdown("# 💳 اشتراكي ومدفوعاتي")
+    summ = get_payment_summary(st.session_state.username)
+    sub = get_player_finance(st.session_state.username)
+    if sub:
+        st.write(f"القيمة: {summ['season_fee']:,.0f} جنيه | المدفوع: {summ['total_paid']:,.0f} | المتبقي: {summ['remaining']:,.0f}")
+        st.write(f"الموسم: {sub.get('start_date')} - {sub.get('end_date')}")
+        st.write(f"الحالة: {'🟢 نشط' if sub.get('subscription_status') == 'Active' else '🔴 غير نشط'}")
+
+# =============================================================================
+# صفحة تسجيل الدخول
+# =============================================================================
+def login_page():
+    coach_exists = check_coach_exists()
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown(f'<div class="login-icon">{get_logo_html(120)}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-title">الكوتش أكاديمي</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-subtitle">نظام إدارة الحضور والاشتراكات الموسمية</div>', unsafe_allow_html=True)
+    if not coach_exists:
+        st.markdown('<div class="welcome-box"><h3>👋 مرحباً بك!</h3><p>سيتم تسجيلك كـ <strong>كابتن</strong>.</p></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="welcome-box"><h3>👋 مرحباً بك!</h3><p>قم بتسجيل الدخول أو إنشاء حساب جديد.</p></div>', unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["🔐 تسجيل الدخول", "📝 تسجيل حساب جديد"])
+    with tab1:
+        username = st.text_input("اسم المستخدم (الاسم الثلاثي)", key="login_user")
+        password = st.text_input("كلمة المرور", type="password", key="login_pass")
+        if st.button("تسجيل الدخول"):
+            if username and password:
+                success, msg = login(username, password)
+                if success:
+                    st.success(msg)
+                    st.toast("✅ تم تسجيل الدخول بنجاح!", icon="🔓")
+                    time.sleep(2)
+                    st.rerun()
                 else:
-                    telegram_message = f"""
-📩 <b>رسالة جديدة من موقع الكوتش أكاديمي</b>
-━━━━━━━━━━━━━━━━━━━━
-👤 <b>الاسم:</b> {contact_name}
-📞 <b>رقم الهاتف:</b> {contact_phone}
-📋 <b>نوع الاستفسار:</b> {inquiry_type}
-💬 <b>الرسالة:</b> {contact_message}
-━━━━━━━━━━━━━━━━━━━━
-🕐 <b>تاريخ الإرسال:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                    """
-                    telegram_sent = send_telegram_message(telegram_message)
-                    if telegram_sent:
-                        st.session_state.show_contact_success = True
-                        st.rerun()
-                    else:
-                        st.markdown('<div class="ec-error-msg">❌ حدث خطأ في إرسال الرسالة، يرجى المحاولة مرة أخرى.</div>', unsafe_allow_html=True)
+                    st.error(msg)
+            else:
+                st.error("يرجى إدخال اسم المستخدم وكلمة المرور")
+    with tab2:
+        role_for_new = "player" if coach_exists else "coach"
+        role_text = "لاعب" if coach_exists else "كابتن"
+        st.markdown(f'<div class="info-box"><p>👋 سيتم تسجيلك كـ <strong>{role_text}</strong>.</p></div>', unsafe_allow_html=True)
+        new_user = st.text_input("الاسم الثلاثي", key="reg_user")
+        new_pass = st.text_input("كلمة المرور", type="password", key="reg_pass")
+        confirm = st.text_input("تأكيد كلمة المرور", type="password", key="reg_confirm")
+        if st.button("تسجيل حساب جديد"):
+            if not new_user or not new_pass:
+                st.error("يرجى ملء جميع الحقول")
+            elif not validate_triple_name(new_user):
+                st.error("الاسم يجب أن يكون ثلاثياً (مثال: أحمد محمد علي)")
+            elif new_pass != confirm:
+                st.error("كلمة المرور غير متطابقة")
+            elif len(new_pass) < 6:
+                st.error("كلمة المرور يجب أن تكون 6 أحرف على الأقل")
+            else:
+                success, msg = add_user(new_user, new_pass, role_for_new, "")
+                if success:
+                    st.success(msg)
+                    st.toast("✅ تم إنشاء الحساب بنجاح!", icon="🎉")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error(msg)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        if st.session_state.get("show_contact_success", False):
-            st.markdown('<div class="ec-success-msg">✅ تم إرسال رسالتك بنجاح! سنتواصل معك في أقرب وقت.</div>', unsafe_allow_html=True)
-            st.session_state.show_contact_success = False
+# =============================================================================
+# الدالة الرئيسية
+# =============================================================================
+def main():
+    init_session()
+    if not st.session_state.sheets_initialized:
+        if init_sheets():
+            st.session_state.sheets_initialized = True
+    if not st.session_state.logged_in:
+        login_page()
+    else:
+        navigation_bar()
+        page = st.session_state.current_page
+        if st.session_state.role == "coach":
+            if page == "dashboard": coach_dashboard_page()
+            elif page == "attendance": coach_attendance_page()
+            elif page == "attendance_history": coach_attendance_history_page()
+            elif page == "subscriptions_payments": coach_subscriptions_payments_page()
+            elif page == "players": coach_players_page()
+            elif page == "finance_reports": coach_finance_reports_page()
+            else: coach_dashboard_page()
+        else:
+            if page == "dashboard": player_dashboard_page()
+            elif page == "my_attendance": player_attendance_page()
+            elif page == "my_subscription": player_subscription_page()
+            else: player_dashboard_page()
 
-    with col_info:
-        st.markdown("""
-        <div class="ec-contact-card">
-            <h3 style="color:#000000; margin:0 0 18px; font-size:1.3rem; font-weight:800;">📍 معلومات التواصل</h3>
-            <div class="ec-contact-item">
-                <div class="ec-icon">📍</div>
-                <div>
-                    <strong style="color:#1e293b;">العنوان</strong><br>
-                    <span style="color:#64748b;">ملاعب مدرسة السلام المتطورة - أسيوط</span>
-                </div>
-            </div>
-            <div class="ec-contact-item">
-                <div class="ec-icon">📞</div>
-                <div>
-                    <strong style="color:#1e293b;">الهاتف</strong><br>
-                    <span style="color:#64748b;"><a href="tel:+201285197778" style="color:#64748b; text-decoration:none;">+20 12 851 97778</a></span>
-                </div>
-            </div>
-            <div class="ec-contact-item">
-                <div class="ec-icon">🕐</div>
-                <div>
-                    <strong style="color:#1e293b;">أوقات التدريب</strong><br>
-                    <span style="color:#64748b;">السبت والخميس - الفترة المسائية</span>
-                </div>
-            </div>
-            <div class="ec-contact-item">
-                <div class="ec-icon">📧</div>
-                <div>
-                    <strong style="color:#1e293b;">التواصل الإلكتروني</strong><br>
-                    <span style="color:#64748b;">أرسل رسالتك عبر النموذج وسنرد عليك</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("""
-        <div style="margin-top: 20px; text-align: center;">
-            <a href="https://wa.me/201285197778?text=مرحباً%20بالكوتش%20أكاديمي" target="_blank" class="ec-whatsapp-btn">
-                💬 تواصل معنا عبر واتساب
-            </a>
-        </div>
-        <div style="margin-top: 25px; text-align: center;">
-            <a href="https://maps.app.goo.gl/MX9GM7XC4jenPpgs8" target="_blank" style="display: inline-flex; align-items: center; gap: 8px; background: #4285F4; color: white; padding: 10px 20px; border-radius: 50px; text-decoration: none; font-weight: 700;">
-                🗺️ عرض الموقع على خرائط جوجل
-            </a>
-        </div>
-        <div class="ec-map-container" style="margin-top: 15px;">
-            <iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3500.123456789!2d31.201543!3d27.171729!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x144c4d4b4b4b4b4b%3A0x4b4b4b4b4b4b4b4b!2z2YXYrdmF2K8g2KfZhNio2K8g2KfZhNipINmF2YjZgyDYp9mE2K_Ys9mF!5e0!3m2!1sar!2seg!4v1234567890123!5m2!1sar!2seg" allowfullscreen="" loading="lazy"></iframe>
-        </div>
-        """, unsafe_allow_html=True)
-
-# ====================================================================================================
-# NEWS PAGE
-# ====================================================================================================
-elif page == "news":
-    st.markdown("""
-    <div class="ec-page-header">
-        <h1>الأخبار</h1>
-        <p>آخر أخبار وأنشطة الكوتش أكاديمي</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    news_items = [
-        {"title": "بدء التسجيل للموسم الجديد 2025/2026", "date": "2025-08-15", "desc": "يسعدنا الإعلان عن فتح باب التسجيل للموسم التدريبي الجديد 2025/2026. سارعوا بالتسجيل للاستفادة من خصم التسجيل المبكر."},
-        {"title": "فوز فريق الأكاديمية ببطولة أسيوط للناشئين", "date": "2025-06-20", "desc": "حقق فريق الأكاديمية إنجازًا رائعًا بالفوز ببطولة أسيوط للناشئين تحت 12 سنة، بعد مباراة نهائية مثيرة."},
-        {"title": "دورة تدريبية متقدمة للمدربين", "date": "2025-05-10", "desc": "أتم مدربو الأكاديمية بنجاح دورة تدريبية متقدمة في أساليب التدريب الحديثة، بالتعاون مع الاتحاد المصري لكرة القدم."},
-        {"title": "انضمام لاعبين من الأكاديمية لمنتخب المحافظة", "date": "2025-04-05", "desc": "تم اختيار 5 لاعبين من الأكاديمية للانضمام لمنتخب محافظة أسيوط تحت 14 سنة."},
-        {"title": "محاضرة تثقيفية عن التغذية الرياضية", "date": "2025-03-15", "desc": "نظمت الأكاديمية محاضرة تثقيفية لأولياء الأمور واللاعبين حول أهمية التغذية السليمة."},
-        {"title": "شراكة جديدة مع نادي أسيوط الرياضي", "date": "2025-02-20", "desc": "وقّعت الأكاديمية اتفاقية شراكة مع نادي أسيوط الرياضي لتسهيل انتقال اللاعبين الموهوبين."},
-    ]
-
-    for item in news_items:
-        st.markdown(f"""
-        <div class="ec-news-card">
-            <h3>📌 {item['title']}</h3>
-            <div class="ec-news-date">🗓️ {item['date']}</div>
-            <p>{item['desc']}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-# ====================================================================================================
-# FOOTER
-# ====================================================================================================
-current_year = datetime.now().year
-footer_links = f"""
-<div class="ec-footer">
-    <div class="ec-footer-inner">
-        <div>
-            <h4>الكوتش أكاديمي</h4>
-            <p>أكاديمية كرة القدم المتخصصة في بناء اللاعب الشامل فنيًا وبدنيًا وذهنيًا.</p>
-        </div>
-        <div>
-            <h4>روابط سريعة</h4>
-            <ul>
-                <li>{nav_link("🏠 الرئيسية", "home")}</li>
-                <li>{nav_link("ℹ️ من نحن", "about")}</li>
-                <li>{nav_link("⚽ البرامج التدريبية", "programs")}</li>
-                <li>{nav_link("👨‍🏫 الكباتن", "captains")}</li>
-                <li>{nav_link("📝 سجل لاعب جديد", "registration")}</li>
-            </ul>
-        </div>
-        <div>
-            <h4>تواصل معنا</h4>
-            <p>📍 ملاعب مدرسة السلام المتطورة - أسيوط</p>
-            <p>🕐 السبت والخميس - الفترة المسائية</p>
-            <p style="margin-top:12px;">{nav_link("📞 اتصل بنا", "contact")}</p>
-        </div>
-    </div>
-    <div class="ec-footer-bottom">
-        جميع الحقوق محفوظة &copy; {current_year} الكوتش أكاديمي
-    </div>
-</div>
-"""
-st.markdown(footer_links, unsafe_allow_html=True)
+if __name__ == "__main__":
+    main()
