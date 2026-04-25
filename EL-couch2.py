@@ -32,7 +32,6 @@ st.set_page_config(
 # دالة عرض الشعار
 # =============================================================================
 def get_logo_html(width=50):
-    """عرض الشعار أو أيقونة بديلة."""
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
         try:
@@ -48,7 +47,6 @@ def get_logo_html(width=50):
 # دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
 def retry_on_quota(func, max_retries=5, delay=3.0):
-    """إعادة المحاولة عند تجاوز حصة Google Sheets (429)."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -63,16 +61,14 @@ def retry_on_quota(func, max_retries=5, delay=3.0):
     return wrapper
 
 def generate_random_password(length=6):
-    """توليد كلمة مرور عشوائية مكونة من حروف وأرقام."""
     chars = string.ascii_letters + string.digits
     return ''.join(random.choice(chars) for _ in range(length))
 
 # =============================================================================
-# الاتصال بـ Google Sheets (الملف الأساسي)
+# إعداد Google Sheets (الملف الأساسي + الملف الخارجي)
 # =============================================================================
 @st.cache_resource
 def get_google_sheets_client():
-    """عميل الملف الأساسي."""
     try:
         cred_section = st.secrets["google"]["service_account"]
         credentials_dict = {
@@ -106,7 +102,6 @@ def get_google_sheets_client():
 
 @st.cache_resource
 def get_external_sheets_client():
-    """عميل الملف الخارجي (للقراءة فقط)."""
     try:
         cred_section = st.secrets["external_sheet"]["service_account"]
         credentials_dict = {
@@ -172,48 +167,46 @@ def get_worksheet(sheet_name, external=False):
     return None
 
 def init_sheets():
-    """تهيئة أوراق الملف الأساسي."""
+    """
+    تهيئة أوراق الملف الأساسي (Users, Attendance, Finance, Payments).
+    Attendance بـ 50000 صف، والباقي بـ 1000 صف.
+    """
     workbook = get_workbook()
     if not workbook:
         return False
 
-    try:
-        required_sheets = {
-            "Users": ["username", "password", "role", "created_at"],
-            "Attendance": ["player_name", "date", "status", "recorded_by", "created_at"],
-            "Finance": ["player_name", "season_fee", "start_date", "end_date",
-                        "subscription_status", "total_paid", "last_payment_date", "updated_at"],
-            "Payments": ["player_name", "amount", "payment_method", "payment_date",
-                          "notes", "recorded_by", "created_at"]
-        }
+    # تعريف الأوراق المطلوبة كـ dict بسيط: اسم الورقة -> (عنوان الورقة, العناوين, عدد الصفوف)
+    required = {
+        "Users": ("Users", ["username", "password", "role", "created_at"], 1000),
+        "Attendance": ("Attendance", ["player_name", "date", "status", "recorded_by", "created_at"], 50000),
+        "Finance": ("Finance", ["player_name", "season_fee", "start_date", "end_date",
+                                "subscription_status", "total_paid", "last_payment_date", "updated_at"], 1000),
+        "Payments": ("Payments", ["player_name", "amount", "payment_method", "payment_date",
+                                  "notes", "recorded_by", "created_at"], 1000)
+    }
 
-        existing_sheets = {sheet.title: sheet for sheet in workbook.worksheets()}
+    existing_sheets = {sheet.title: sheet for sheet in workbook.worksheets()}
 
-        for sheet_name, (title, headers) in required_sheets.items():
-            if sheet_name not in existing_sheets:
-                rows = 50000 if sheet_name == "Attendance" else 1000
-                sheet = workbook.add_worksheet(title=title, rows=str(rows), cols=str(len(headers)))
+    for sheet_key, (title, headers, rows_needed) in required.items():
+        if sheet_key not in existing_sheets:
+            sheet = workbook.add_worksheet(title=title, rows=str(rows_needed), cols=str(len(headers)))
+            sheet.append_row(headers)
+        else:
+            sheet = existing_sheets[sheet_key]
+            existing_headers = sheet.row_values(1)
+            if not existing_headers or existing_headers != headers:
+                sheet.clear()
                 sheet.append_row(headers)
-            else:
-                sheet = existing_sheets[sheet_name]
-                existing_headers = sheet.row_values(1)
-                if not existing_headers or existing_headers != headers:
-                    sheet.clear()
-                    sheet.append_row(headers)
-                # توسيع الورقة إذا لزم الأمر
-                current_rows = sheet.row_count
-                req_rows = 50000 if sheet_name == "Attendance" else 1000
-                if current_rows < req_rows:
-                    sheet.add_rows(req_rows - current_rows)
+            # توسيع الورقة إذا لزم الأمر
+            current_rows = sheet.row_count
+            if current_rows < rows_needed:
+                sheet.add_rows(rows_needed - current_rows)
 
-        get_worksheet.clear()
-        return True
-    except Exception as e:
-        st.error(f"❌ خطأ في تهيئة Sheets: {str(e)}")
-        return False
+    get_worksheet.clear()
+    return True
 
 # =============================================================================
-# دوال قراءة البيانات الأساسية (مع تخزين مؤقت)
+# دوال قراءة البيانات الأساسية
 # =============================================================================
 @retry_on_quota
 def _get_all_records_safe(sheet_name, external=False):
@@ -267,13 +260,9 @@ def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
-# استيراد البيانات من الملف الخارجي
+# استيراد اللاعبين من الملف الخارجي
 # =============================================================================
 def import_players_from_external():
-    """
-    قراءة الأسماء من الملف الخارجي (ورقة Players) وإضافتهم إلى Users الأساسي
-    إذا لم يكونوا مسجلين بالفعل، مع كلمة مرور عشوائية.
-    """
     try:
         cfg = st.secrets["external_sheet"]
         sheet_name = cfg["worksheet_name"]
@@ -282,14 +271,11 @@ def import_players_from_external():
     except Exception as e:
         return False, f"خطأ في قراءة إعدادات الملف الخارجي: {e}"
 
-    # جلب بيانات الملف الخارجي
     external_data = _get_all_records_safe(sheet_name, external=True)
     if not external_data:
         return False, "لم يتم العثور على بيانات في الملف الخارجي."
 
-    # جلب المستخدمين الحاليين
     current_users = {u["username"] for u in get_all_users()}
-
     new_players = []
     for row in external_data:
         name = row.get(name_col, "").strip()
@@ -303,7 +289,6 @@ def import_players_from_external():
     if not new_players:
         return True, "جميع اللاعبين مسجلين بالفعل."
 
-    # إضافة اللاعبين الجدد
     added = 0
     for name, group in new_players:
         password = generate_random_password()
@@ -1084,7 +1069,6 @@ def coach_subscriptions_payments_page():
 def coach_players_page():
     st.markdown("# 👥 إدارة اللاعبين")
     
-    # ---- زراير المزامنة ----
     col_sync1, col_sync2 = st.columns(2)
     with col_sync1:
         if st.button("🔄 مزامنة اللاعبين من الملف الخارجي", use_container_width=True):
@@ -1098,7 +1082,7 @@ def coach_players_page():
                 st.error(msg)
     with col_sync2:
         if st.button("📋 عرض اللاعبين الحاليين", use_container_width=True):
-            pass  # مجرد تحديث للعرض
+            pass
 
     st.markdown("---")
     
