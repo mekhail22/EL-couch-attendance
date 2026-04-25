@@ -1,9 +1,8 @@
 """
 نظام الكوتش أكاديمي - إدارة الحضور والاشتراكات الموسمية
 =====================================================
-يدعم استيراد لاعبين جدد من ملف خارجي (Google Sheets) مع كلمة مرور تلقائية.
-جميع العمليات الأساسية (حضور، اشتراكات، مدفوعات) تتم على الملف الأساسي فقط.
-تم إضافة حقل 'الفئة العمرية' إلى بيانات المستخدمين.
+تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
+مع تقارير مالية محمية، تصنيف حسب الفئات العمرية، وحماية إدارة اللاعبين بكلمة مرور.
 """
 
 import streamlit as st
@@ -667,6 +666,7 @@ def init_session():
         "role": None,
         "current_page": "dashboard",
         "finance_authenticated": False,
+        "players_authenticated": False,
         "sheets_initialized": False
     }
     for key, default_value in defaults.items():
@@ -683,6 +683,7 @@ def login(username: str, password: str):
         st.session_state.role = user.get("role", "player").strip()
         st.session_state.current_page = "dashboard"
         st.session_state.finance_authenticated = False
+        st.session_state.players_authenticated = False
         return True, "تم تسجيل الدخول بنجاح"
     return False, "اسم المستخدم أو كلمة المرور غير صحيحة"
 
@@ -692,6 +693,7 @@ def logout():
     st.session_state.role = None
     st.session_state.current_page = "login"
     st.session_state.finance_authenticated = False
+    st.session_state.players_authenticated = False
     st.rerun()
 
 def navigate_to(page: str):
@@ -809,16 +811,22 @@ def navigation_bar():
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =============================================================================
-# صفحة المصادقة المالية
+# صفحة المصادقة (للتقارير المالية وإدارة اللاعبين)
 # =============================================================================
-def finance_auth_wall():
-    st.markdown("## 🔐 المصادقة المطلوبة")
-    st.markdown("الرجاء إدخال كلمة المرور للوصول إلى التقارير المالية.")
-    password = st.text_input("كلمة المرور", type="password", key="finance_pass_input")
-    if st.button("تحقق", key="finance_auth_btn"):
-        correct_password = st.secrets.get("app", {}).get("finance_password", "")
+def auth_wall(page_type="finance"):
+    if page_type == "finance":
+        st.markdown("## 🔐 المصادقة المطلوبة (التقارير المالية)")
+    else:
+        st.markdown("## 🔐 المصادقة المطلوبة (إدارة اللاعبين)")
+    st.markdown("الرجاء إدخال كلمة المرور للوصول.")
+    password = st.text_input("كلمة المرور", type="password", key=f"{page_type}_pass_input")
+    if st.button("تحقق", key=f"{page_type}_auth_btn"):
+        correct_password = st.secrets.get("app", {}).get(f"{page_type}_password", "")
         if password == correct_password:
-            st.session_state.finance_authenticated = True
+            if page_type == "finance":
+                st.session_state.finance_authenticated = True
+            else:
+                st.session_state.players_authenticated = True
             st.rerun()
         else:
             st.error("❌ كلمة المرور غير صحيحة")
@@ -835,9 +843,11 @@ def coach_dashboard_page():
     players = [u for u in users if u.get("role") == "player"]
     attendance = get_all_attendance()
     today_attendance = get_today_attendance()
+    
+    # إحصائيات عامة
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.markdown(f'<div class="stat-card"><div class="stat-number">{len(players)}</div><div class="stat-label">👥 عدد اللاعبين</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="stat-card"><div class="stat-number">{len(players)}</div><div class="stat-label">👥 إجمالي اللاعبين</div></div>', unsafe_allow_html=True)
     with col2:
         present_today = len([a for a in today_attendance if a.get("status") == "Present"])
         st.markdown(f'<div class="stat-card"><div class="stat-number">{present_today}</div><div class="stat-label">✅ الحضور اليوم</div></div>', unsafe_allow_html=True)
@@ -847,6 +857,36 @@ def coach_dashboard_page():
     with col4:
         not_recorded = len(players) - len(today_attendance)
         st.markdown(f'<div class="stat-card"><div class="stat-number">{max(0, not_recorded)}</div><div class="stat-label">⏳ لم يُسجل</div></div>', unsafe_allow_html=True)
+
+    # إحصائيات حسب الفئات العمرية
+    st.markdown("---")
+    st.markdown("### 📊 إحصائيات الفئات العمرية")
+    age_groups = {}
+    for p in players:
+        age = p.get("age_group", "غير محدد").strip()
+        if not age:
+            age = "غير محدد"
+        if age not in age_groups:
+            age_groups[age] = {"total": 0, "present": 0, "absent": 0}
+        age_groups[age]["total"] += 1
+        player_att = get_today_attendance()
+        for a in player_att:
+            if a["player_name"].strip() == p["username"].strip():
+                if a["status"] == "Present":
+                    age_groups[age]["present"] += 1
+                else:
+                    age_groups[age]["absent"] += 1
+                break
+
+    if age_groups:
+        cols = st.columns(len(age_groups))
+        for idx, (age, stats) in enumerate(age_groups.items()):
+            with cols[idx]:
+                st.markdown(f'<div class="stat-card"><div style="font-size:20px;font-weight:700;">{age}</div>'
+                            f'<div style="font-size:16px;margin-top:10px;">👥 {stats["total"]}</div>'
+                            f'<div style="font-size:14px;">✅ {stats["present"]} | ❌ {stats["absent"]}</div></div>',
+                            unsafe_allow_html=True)
+
     st.markdown("---")
     st.markdown("### 📋 آخر سجلات الحضور")
     if attendance:
@@ -858,81 +898,75 @@ def coach_dashboard_page():
         st.info("لا توجد سجلات حضور بعد")
 
 def coach_attendance_page():
-    st.markdown("# ✅ تسجيل الحضور والغياب")
+    st.markdown("# ✅ تسجيل الحضور والغياب (مصنف حسب الفئات العمرية)")
     users = get_all_users()
-    players = [u.get("username", "").strip() for u in users if u.get("role") == "player"]
-    if not players:
+    
+    # تجميع اللاعبين حسب الفئة العمرية
+    age_categories = {}
+    for u in users:
+        if u.get("role") != "player":
+            continue
+        age = u.get("age_group", "غير محدد").strip()
+        if not age:
+            age = "غير محدد"
+        if age not in age_categories:
+            age_categories[age] = []
+        age_categories[age].append(u["username"].strip())
+    
+    if not age_categories:
         st.warning("⚠️ لا يوجد لاعبين مسجلين")
         return
+    
     st.date_input("📅 تاريخ التسجيل", value=date.today())
     st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("✅ تسجيل حضور الجميع", use_container_width=True):
-            success, msg = record_multiple_attendance(players, "Present", st.session_state.username)
-            if success:
-                st.success(msg)
-                st.toast("✅ تم تسجيل الحضور لجميع اللاعبين!", icon="✅")
-                time.sleep(2)
-                st.rerun()
+    
+    # تسجيل الحضور لكل فئة
+    for age_group, players in age_categories.items():
+        st.markdown(f"### 🏷️ فئة: {age_group} ({len(players)} لاعب)")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"✅ تسجيل حضور فئة {age_group}", key=f"present_all_{age_group}"):
+                success, msg = record_multiple_attendance(players, "Present", st.session_state.username)
+                if success:
+                    st.success(msg)
+                    st.toast(f"✅ تم تسجيل حضور فئة {age_group}!", icon="✅")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error(msg)
+        with col2:
+            if st.button(f"❌ تسجيل غياب فئة {age_group}", key=f"absent_all_{age_group}"):
+                success, msg = record_multiple_attendance(players, "Absent", st.session_state.username)
+                if success:
+                    st.success(msg)
+                    st.toast(f"✅ تم تسجيل غياب فئة {age_group}!", icon="✅")
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error(msg)
+        # اختيار محددين
+        present = st.multiselect(f"اختر الحاضرين من فئة {age_group}", players, key=f"present_{age_group}")
+        if st.button(f"تسجيل حضور المحددين - {age_group}", key=f"btn_present_{age_group}"):
+            if present:
+                success, msg = record_multiple_attendance(present, "Present", st.session_state.username)
+                if success:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
             else:
-                st.error(msg)
-    with col2:
-        if st.button("❌ تسجيل غياب الجميع", use_container_width=True):
-            success, msg = record_multiple_attendance(players, "Absent", st.session_state.username)
-            if success:
-                st.success(msg)
-                st.toast("✅ تم تسجيل الغياب لجميع اللاعبين!", icon="✅")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error(msg)
-    st.markdown("---")
-    st.markdown("### ✅ الحضور")
-    present = st.multiselect("اختر الحاضرين", players, key="present")
-    if st.button("تسجيل حضور المحددين"):
-        if present:
-            success, msg = record_multiple_attendance(present, "Present", st.session_state.username)
-            if success:
-                st.success(msg)
-                st.toast(f"✅ تم تسجيل حضور {len(present)} لاعب!", icon="✅")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error(msg)
-        else:
-            st.warning("⚠️ يرجى اختيار لاعب واحد على الأقل")
-    st.markdown("### ❌ الغياب")
-    remaining = [p for p in players if p not in present]
-    absent = st.multiselect("اختر الغائبين", remaining, key="absent")
-    if st.button("تسجيل غياب المحددين"):
-        if absent:
-            success, msg = record_multiple_attendance(absent, "Absent", st.session_state.username)
-            if success:
-                st.success(msg)
-                st.toast(f"✅ تم تسجيل غياب {len(absent)} لاعب!", icon="✅")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error(msg)
-        else:
-            st.warning("⚠️ يرجى اختيار لاعب واحد على الأقل")
-    st.markdown("---")
-    st.markdown("### 📝 تسجيل فردي")
-    c1, c2, c3 = st.columns([2,1,1])
-    with c1: sp = st.selectbox("اللاعب", players)
-    with c2: ss = st.selectbox("الحالة", ["Present","Absent"], format_func=lambda x: "✅ حاضر" if x=="Present" else "❌ غائب")
-    with c3:
-        st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-        if st.button("تسجيل"):
-            success, msg = record_attendance(sp, ss, st.session_state.username)
-            if success:
-                st.success(msg)
-                st.toast(f"✅ تم تسجيل {'الحضور' if ss=='Present' else 'الغياب'} لـ {sp}!", icon="✅")
-                time.sleep(2)
-                st.rerun()
-            else:
-                st.error(msg)
+                st.warning("⚠️ يرجى اختيار لاعب واحد على الأقل")
+        remaining = [p for p in players if p not in present]
+        absent = st.multiselect(f"اختر الغائبين من فئة {age_group}", remaining, key=f"absent_{age_group}")
+        if st.button(f"تسجيل غياب المحددين - {age_group}", key=f"btn_absent_{age_group}"):
+            if absent:
+                success, msg = record_multiple_attendance(absent, "Absent", st.session_state.username)
+                if success:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+        st.markdown("---")
 
 def coach_attendance_history_page():
     st.markdown("# 📋 سجل الحضور")
@@ -1112,7 +1146,11 @@ def coach_subscriptions_payments_page():
             st.info("لا توجد اشتراكات")
 
 def coach_players_page():
-    st.markdown("# 👥 إدارة اللاعبين")
+    if not st.session_state.get("players_authenticated", False):
+        auth_wall("players")
+        return
+
+    st.markdown("# 👥 إدارة اللاعبين (محمية بكلمة مرور)")
     
     # زر المزامنة يظهر فقط إذا كانت إعدادات الملف الخارجي موجودة
     if has_external_sheet_config():
@@ -1129,12 +1167,37 @@ def coach_players_page():
         st.info("ℹ️ لإضافة لاعبين من ملف خارجي، قم بإعداد [external_sheet] في secrets.toml.")
     
     st.markdown("---")
-    
+    # زر "اختر لاعب" أصبح تحت زر المزامنة
     users = get_all_users()
     players = [u for u in users if u.get("role")=="player"]
     if not players:
         st.info("لا يوجد لاعبين")
         return
+    sel = st.selectbox("اختر لاعب", [p["username"].strip() for p in players])
+    if sel:
+        player_data = next((p for p in players if p["username"].strip() == sel), None)
+        if player_data:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("### معلومات اللاعب")
+                st.write(f"**الاسم:** {player_data['username']}")
+                st.write(f"**كلمة المرور:** {player_data['password']}")  # عرض كلمة المرور
+                st.write(f"**الفئة العمرية:** {player_data.get('age_group', 'غير محدد')}")
+                stats = get_attendance_stats(sel)
+                st.write(f"**نسبة الحضور:** {stats['percentage']}%")
+            with c2:
+                st.markdown("### الاشتراك")
+                sub = get_player_finance(sel)
+                if sub:
+                    st.write(f"**القيمة:** {sub.get('season_fee')} جنيه")
+                    st.write(f"**المدفوع:** {sub.get('total_paid')} جنيه")
+                    st.write(f"**المتبقي:** {max(0, float(sub.get('season_fee',0))-float(sub.get('total_paid',0))):,.0f} جنيه")
+                    st.write(f"**الحالة:** {'🟢 نشط' if sub.get('subscription_status')=='Active' else '🔴 غير نشط'}")
+                else:
+                    st.write("لا يوجد اشتراك")
+    
+    st.markdown("---")
+    st.markdown("### 📋 جميع اللاعبين")
     data = []
     for p in players:
         name = p["username"].strip()
@@ -1144,26 +1207,15 @@ def coach_players_page():
         data.append({
             "اللاعب": name,
             "الفئة العمرية": age_group,
+            "كلمة المرور": p["password"],  # عرض كلمة المرور
             "نسبة الحضور": f"{stats['percentage']}%",
             "الاشتراك": "🟢 نشط" if sub and sub.get("subscription_status")=="Active" else "🔴 غير نشط"
         })
     st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
-    st.markdown("---")
-    sel = st.selectbox("اختر لاعب", [p["username"].strip() for p in players])
-    if sel:
-        c1, c2 = st.columns(2)
-        with c1:
-            s = get_attendance_stats(sel)
-            st.write(f"الحضور: {s['present']} | الغياب: {s['absent']} | النسبة: {s['percentage']}%")
-        with c2:
-            sub = get_player_finance(sel)
-            if sub:
-                st.write(f"القيمة: {sub.get('season_fee')} جنيه | المدفوع: {sub.get('total_paid')} | المتبقي: {max(0, float(sub.get('season_fee',0))-float(sub.get('total_paid',0))):.0f}")
-                st.write(f"الحالة: {'🟢 نشط' if sub.get('subscription_status')=='Active' else '🔴 غير نشط'}")
 
 def coach_finance_reports_page():
     if not st.session_state.get("finance_authenticated", False):
-        finance_auth_wall()
+        auth_wall("finance")
         return
     st.markdown("# 📊 التقارير المالية")
     finance = get_all_finance()
@@ -1289,7 +1341,6 @@ def login_page():
             elif len(new_pass) < 6:
                 st.error("كلمة المرور يجب أن تكون 6 أحرف على الأقل")
             else:
-                # يمكنك ترك حقل الفئة العمرية فارغاً عند التسجيل اليدوي
                 success, msg = add_user(new_user, new_pass, role_for_new, age_group="")
                 if success:
                     st.success(msg)
