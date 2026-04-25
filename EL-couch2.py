@@ -1,9 +1,8 @@
 """
 نظام الكوتش أكاديمي - إدارة الحضور والاشتراكات الموسمية
 =====================================================
-تطبيق شامل لإدارة أكاديمية كرة القدم من حيث الحضور والاشتراكات والمدفوعات
-مع تقارير مالية محمية وواجهة مستخدم عربية بالكامل.
-تم تخصيص 50,000 صف لورقة Attendance وباقي الأوراق 1,000 صف.
+يدعم استيراد لاعبين جدد من ملف خارجي (Google Sheets) مع كلمة مرور تلقائية.
+جميع العمليات الأساسية (حضور، اشتراكات، مدفوعات) تتم على الملف الأساسي فقط.
 """
 
 import streamlit as st
@@ -15,6 +14,8 @@ import re
 import os
 import base64
 import time
+import random
+import string
 from functools import wraps
 
 # =============================================================================
@@ -31,6 +32,7 @@ st.set_page_config(
 # دالة عرض الشعار
 # =============================================================================
 def get_logo_html(width=50):
+    """عرض الشعار أو أيقونة بديلة."""
     logo_path = "logo.jpg"
     if os.path.exists(logo_path):
         try:
@@ -46,6 +48,7 @@ def get_logo_html(width=50):
 # دوال مساعدة للتخزين المؤقت وإعادة المحاولة
 # =============================================================================
 def retry_on_quota(func, max_retries=5, delay=3.0):
+    """إعادة المحاولة عند تجاوز حصة Google Sheets (429)."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         for attempt in range(max_retries):
@@ -59,28 +62,35 @@ def retry_on_quota(func, max_retries=5, delay=3.0):
         return None
     return wrapper
 
+def generate_random_password(length=6):
+    """توليد كلمة مرور عشوائية مكونة من حروف وأرقام."""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
+
 # =============================================================================
-# إعداد Google Sheets
+# الاتصال بـ Google Sheets (الملف الأساسي)
 # =============================================================================
 @st.cache_resource
 def get_google_sheets_client():
+    """عميل الملف الأساسي."""
     try:
+        cred_section = st.secrets["google"]["service_account"]
         credentials_dict = {
-            "type": st.secrets["google"]["service_account"]["type"],
-            "project_id": st.secrets["google"]["service_account"]["project_id"],
-            "private_key_id": st.secrets["google"]["service_account"]["private_key_id"],
-            "private_key": st.secrets["google"]["service_account"]["private_key"],
-            "client_email": st.secrets["google"]["service_account"]["client_email"],
-            "client_id": st.secrets["google"]["service_account"]["client_id"],
-            "auth_uri": st.secrets["google"]["service_account"]["auth_uri"],
-            "token_uri": st.secrets["google"]["service_account"]["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["google"]["service_account"]["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": st.secrets["google"]["service_account"]["client_x509_cert_url"],
-            "universe_domain": st.secrets["google"]["service_account"]["universe_domain"]
+            "type": cred_section["type"],
+            "project_id": cred_section["project_id"],
+            "private_key_id": cred_section["private_key_id"],
+            "private_key": cred_section["private_key"].replace("\\n", "\n"),
+            "client_email": cred_section["client_email"],
+            "client_id": cred_section["client_id"],
+            "auth_uri": cred_section["auth_uri"],
+            "token_uri": cred_section["token_uri"],
+            "auth_provider_x509_cert_url": cred_section["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": cred_section["client_x509_cert_url"],
+            "universe_domain": cred_section.get("universe_domain", "googleapis.com")
         }
         spreadsheet_id = st.secrets["google"]["spreadsheet_id"]
     except Exception as e:
-        st.error(f"❌ خطأ في قراءة الإعدادات: {str(e)}")
+        st.error(f"❌ خطأ في قراءة إعدادات الملف الأساسي: {str(e)}")
         return None, None
 
     try:
@@ -91,7 +101,41 @@ def get_google_sheets_client():
         client = gspread.authorize(credentials)
         return client, spreadsheet_id
     except Exception as e:
-        st.error(f"❌ خطأ في الاتصال بـ Google Sheets: {str(e)}")
+        st.error(f"❌ خطأ في الاتصال بالملف الأساسي: {str(e)}")
+        return None, None
+
+@st.cache_resource
+def get_external_sheets_client():
+    """عميل الملف الخارجي (للقراءة فقط)."""
+    try:
+        cred_section = st.secrets["external_sheet"]["service_account"]
+        credentials_dict = {
+            "type": cred_section["type"],
+            "project_id": cred_section["project_id"],
+            "private_key_id": cred_section["private_key_id"],
+            "private_key": cred_section["private_key"].replace("\\n", "\n"),
+            "client_email": cred_section["client_email"],
+            "client_id": cred_section["client_id"],
+            "auth_uri": cred_section["auth_uri"],
+            "token_uri": cred_section["token_uri"],
+            "auth_provider_x509_cert_url": cred_section["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": cred_section["client_x509_cert_url"],
+            "universe_domain": cred_section.get("universe_domain", "googleapis.com")
+        }
+        spreadsheet_id = st.secrets["external_sheet"]["spreadsheet_id"]
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة إعدادات الملف الخارجي: {str(e)}")
+        return None, None
+
+    try:
+        credentials = Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
+        client = gspread.authorize(credentials)
+        return client, spreadsheet_id
+    except Exception as e:
+        st.error(f"❌ خطأ في الاتصال بالملف الخارجي: {str(e)}")
         return None, None
 
 @st.cache_resource
@@ -101,12 +145,22 @@ def get_workbook():
         try:
             return client.open_by_key(spreadsheet_id)
         except Exception as e:
-            st.error(f"❌ خطأ في فتح ملف Sheets: {str(e)}")
+            st.error(f"❌ خطأ في فتح الملف الأساسي: {str(e)}")
     return None
 
 @st.cache_resource
-def get_worksheet(sheet_name):
-    workbook = get_workbook()
+def get_external_workbook():
+    client, spreadsheet_id = get_external_sheets_client()
+    if client and spreadsheet_id:
+        try:
+            return client.open_by_key(spreadsheet_id)
+        except Exception as e:
+            st.error(f"❌ خطأ في فتح الملف الخارجي: {str(e)}")
+    return None
+
+@st.cache_resource
+def get_worksheet(sheet_name, external=False):
+    workbook = get_external_workbook() if external else get_workbook()
     if workbook:
         try:
             return workbook.worksheet(sheet_name)
@@ -118,40 +172,39 @@ def get_worksheet(sheet_name):
     return None
 
 def init_sheets():
-    """
-    تهيئة الأوراق: Attendance بـ 50000 صف، الباقي بـ 1000 صف.
-    """
+    """تهيئة أوراق الملف الأساسي."""
     workbook = get_workbook()
     if not workbook:
         return False
 
     try:
         required_sheets = {
-            "Users": ("Users", ["username", "password", "role", "created_at"], 1000),
-            "Attendance": ("Attendance", ["player_name", "date", "status", "recorded_by", "created_at"], 50000),
-            "Finance": ("Finance", ["player_name", "season_fee", "start_date", "end_date",
-                                    "subscription_status", "total_paid", "last_payment_date", "updated_at"], 1000),
-            "Payments": ("Payments", ["player_name", "amount", "payment_method", "payment_date",
-                                      "notes", "recorded_by", "created_at"], 1000)
+            "Users": ["username", "password", "role", "created_at"],
+            "Attendance": ["player_name", "date", "status", "recorded_by", "created_at"],
+            "Finance": ["player_name", "season_fee", "start_date", "end_date",
+                        "subscription_status", "total_paid", "last_payment_date", "updated_at"],
+            "Payments": ["player_name", "amount", "payment_method", "payment_date",
+                          "notes", "recorded_by", "created_at"]
         }
 
         existing_sheets = {sheet.title: sheet for sheet in workbook.worksheets()}
 
-        for sheet_name, (title, headers, rows_needed) in required_sheets.items():
+        for sheet_name, (title, headers) in required_sheets.items():
             if sheet_name not in existing_sheets:
-                sheet = workbook.add_worksheet(title=title, rows=str(rows_needed), cols=str(len(headers)))
+                rows = 50000 if sheet_name == "Attendance" else 1000
+                sheet = workbook.add_worksheet(title=title, rows=str(rows), cols=str(len(headers)))
                 sheet.append_row(headers)
             else:
                 sheet = existing_sheets[sheet_name]
-                # التأكد من العناوين
                 existing_headers = sheet.row_values(1)
                 if not existing_headers or existing_headers != headers:
                     sheet.clear()
                     sheet.append_row(headers)
-                # توسيع الورقة إذا لزم الأمر (خاصة Attendance)
+                # توسيع الورقة إذا لزم الأمر
                 current_rows = sheet.row_count
-                if current_rows < rows_needed:
-                    sheet.add_rows(rows_needed - current_rows)
+                req_rows = 50000 if sheet_name == "Attendance" else 1000
+                if current_rows < req_rows:
+                    sheet.add_rows(req_rows - current_rows)
 
         get_worksheet.clear()
         return True
@@ -159,32 +212,12 @@ def init_sheets():
         st.error(f"❌ خطأ في تهيئة Sheets: {str(e)}")
         return False
 
-def ensure_sheet_has_rows(sheet_name, min_rows=100):
-    """
-    التأكد من وجود عدد كافٍ من الصفوف الفارغة في الورقة.
-    إذا قلت الصفوف المتبقية عن min_rows، نضيف 5000 صف إضافية (لـ Attendance) أو 500 لغيرها.
-    """
-    sheet = get_worksheet(sheet_name)
-    if not sheet:
-        return
-    try:
-        total_rows = sheet.row_count
-        # نحتاج معرفة عدد الصفوف المستخدمة حالياً
-        all_values = sheet.get_all_values()
-        used_rows = len(all_values)
-        remaining = total_rows - used_rows
-        if remaining < min_rows:
-            add_rows = 5000 if sheet_name == "Attendance" else 500
-            sheet.add_rows(add_rows)
-    except Exception as e:
-        st.warning(f"تحذير: تعذر توسيع ورقة {sheet_name}: {str(e)}")
-
 # =============================================================================
-# دوال قراءة البيانات مع التخزين المؤقت
+# دوال قراءة البيانات الأساسية (مع تخزين مؤقت)
 # =============================================================================
 @retry_on_quota
-def _get_all_records_safe(sheet_name):
-    sheet = get_worksheet(sheet_name)
+def _get_all_records_safe(sheet_name, external=False):
+    sheet = get_worksheet(sheet_name, external)
     if sheet:
         try:
             return sheet.get_all_records()
@@ -234,6 +267,54 @@ def get_all_payments():
     return clean_records(get_payments_sheet_data())
 
 # =============================================================================
+# استيراد البيانات من الملف الخارجي
+# =============================================================================
+def import_players_from_external():
+    """
+    قراءة الأسماء من الملف الخارجي (ورقة Players) وإضافتهم إلى Users الأساسي
+    إذا لم يكونوا مسجلين بالفعل، مع كلمة مرور عشوائية.
+    """
+    try:
+        cfg = st.secrets["external_sheet"]
+        sheet_name = cfg["worksheet_name"]
+        name_col = cfg["name_column"]
+        group_col = cfg["group_column"]
+    except Exception as e:
+        return False, f"خطأ في قراءة إعدادات الملف الخارجي: {e}"
+
+    # جلب بيانات الملف الخارجي
+    external_data = _get_all_records_safe(sheet_name, external=True)
+    if not external_data:
+        return False, "لم يتم العثور على بيانات في الملف الخارجي."
+
+    # جلب المستخدمين الحاليين
+    current_users = {u["username"] for u in get_all_users()}
+
+    new_players = []
+    for row in external_data:
+        name = row.get(name_col, "").strip()
+        group = row.get(group_col, "").strip()
+        if not name:
+            continue
+        if name in current_users:
+            continue
+        new_players.append((name, group))
+
+    if not new_players:
+        return True, "جميع اللاعبين مسجلين بالفعل."
+
+    # إضافة اللاعبين الجدد
+    added = 0
+    for name, group in new_players:
+        password = generate_random_password()
+        role = "player"
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if append_row_to_sheet("Users", [name, password, role, created_at]):
+            added += 1
+
+    return True, f"تم استيراد {added} لاعب جديد بنجاح (مع كلمات مرور عشوائية)."
+
+# =============================================================================
 # دوال الكتابة (مع دعم الكتابة المجمعة)
 # =============================================================================
 @retry_on_quota
@@ -254,9 +335,6 @@ def append_row_to_sheet(sheet_name, row_data):
 
 @retry_on_quota
 def append_rows_to_sheet(sheet_name, rows_data):
-    """
-    إضافة عدة صفوف دفعة واحدة لتقليل عدد طلبات API.
-    """
     if not rows_data:
         return True
     sheet = get_worksheet(sheet_name)
@@ -265,7 +343,6 @@ def append_rows_to_sheet(sheet_name, rows_data):
         sheet = get_worksheet(sheet_name)
     if sheet:
         try:
-            ensure_sheet_has_rows(sheet_name, len(rows_data) + 5)
             sheet.append_rows(rows_data)
             st.cache_data.clear()
             return True
@@ -366,9 +443,6 @@ def record_attendance(player_name: str, status: str, recorded_by: str):
     return False, "خطأ في الاتصال بقاعدة البيانات"
 
 def record_multiple_attendance(player_names: list, status: str, recorded_by: str):
-    """
-    تسجيل حضور/غياب لمجموعة لاعبين دفعة واحدة لتجنب تجاوز حصة الكتابة.
-    """
     today = datetime.now().strftime("%Y-%m-%d")
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     records = get_all_attendance()
@@ -554,7 +628,7 @@ def get_payment_summary(player_name: str):
     return {"season_fee": season_fee, "total_paid": total_paid, "remaining": remaining, "status": finance.get("subscription_status", "Unknown")}
 
 # =============================================================================
-# تهيئة الجلسة (محفوظة)
+# تهيئة الجلسة
 # =============================================================================
 def init_session():
     defaults = {
@@ -1009,6 +1083,25 @@ def coach_subscriptions_payments_page():
 
 def coach_players_page():
     st.markdown("# 👥 إدارة اللاعبين")
+    
+    # ---- زراير المزامنة ----
+    col_sync1, col_sync2 = st.columns(2)
+    with col_sync1:
+        if st.button("🔄 مزامنة اللاعبين من الملف الخارجي", use_container_width=True):
+            success, msg = import_players_from_external()
+            if success:
+                st.success(msg)
+                st.toast("✅ تمت المزامنة بنجاح!", icon="🔄")
+                time.sleep(2)
+                st.rerun()
+            else:
+                st.error(msg)
+    with col_sync2:
+        if st.button("📋 عرض اللاعبين الحاليين", use_container_width=True):
+            pass  # مجرد تحديث للعرض
+
+    st.markdown("---")
+    
     users = get_all_users()
     players = [u for u in users if u.get("role")=="player"]
     if not players:
